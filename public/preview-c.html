@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Preview C - Tea Green Cool</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #f0f2f0;
+    color: #1a202c;
+    height: 100vh;
+    overflow: hidden;
+    font-size: 14px;
+    line-height: 1.8;
+  }
+  /* Subtle paper texture */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg width='200' height='200' viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+  .app {
+    display: flex;
+    height: 100vh;
+    position: relative;
+    z-index: 1;
+  }
+  /* Sidebar */
+  .sidebar {
+    width: 300px;
+    padding: 32px 24px;
+    display: flex;
+    flex-direction: column;
+  }
+  .logo {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 22px;
+    font-weight: 700;
+    color: #1a202c;
+    margin-bottom: 32px;
+    letter-spacing: 0.1em;
+  }
+  .logo span {
+    font-size: 11px;
+    font-family: 'Noto Sans SC', sans-serif;
+    font-weight: 300;
+    color: #8a9590;
+    display: block;
+    margin-top: 4px;
+    letter-spacing: 0.15em;
+  }
+  .status-card {
+    background: #f7f9f7;
+    border: 1px solid #dce3de;
+    border-radius: 12px 16px 10px 14px;
+    padding: 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 4px 20px rgba(26,32,44,0.03);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+  .status-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 30px rgba(26,32,44,0.06);
+  }
+  .status-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #2d6a4f;
+    position: relative;
+  }
+  .status-dot::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 1px solid rgba(45,106,79,0.25);
+    animation: ripple 2s ease-out infinite;
+  }
+  @keyframes ripple {
+    0% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(1.8); opacity: 0; }
+  }
+  .status-label {
+    font-size: 12px;
+    color: #8a9590;
+    font-weight: 300;
+  }
+  .status-title {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 18px;
+    color: #2d6a4f;
+    font-weight: 600;
+  }
+  .status-sub {
+    font-size: 12px;
+    color: #8a9590;
+    margin-top: 6px;
+    font-weight: 300;
+  }
+  .btn-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .btn {
+    padding: 12px 20px;
+    border: 1px solid #c8d2cc;
+    background: #f7f9f7;
+    color: #1a202c;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 8px 10px 8px 12px;
+    transition: all 0.3s ease;
+    text-align: center;
+    font-weight: 400;
+  }
+  .btn:hover {
+    background: #fff;
+    border-color: #2d6a4f;
+    color: #2d6a4f;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(45,106,79,0.08);
+  }
+  .btn.primary {
+    background: #2d6a4f;
+    color: #f7f9f7;
+    border-color: #2d6a4f;
+    font-weight: 500;
+  }
+  .btn.primary:hover {
+    background: #3d7a5f;
+    color: #fff;
+    box-shadow: 0 6px 16px rgba(45,106,79,0.18);
+  }
+  .progress-wrap {
+    margin-top: auto;
+    padding-top: 24px;
+  }
+  .progress-label {
+    font-size: 11px;
+    color: #8a9590;
+    margin-bottom: 8px;
+    font-weight: 300;
+    letter-spacing: 0.1em;
+    display: flex;
+    justify-content: space-between;
+  }
+  .progress-track {
+    height: 3px;
+    background: #dce3de;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    width: 60%;
+    background: #2d6a4f;
+    border-radius: 2px;
+    transition: width 0.5s ease;
+  }
+  /* Main */
+  .main {
+    flex: 1;
+    padding: 32px 40px;
+    overflow-y: auto;
+  }
+  .page-header {
+    margin-bottom: 28px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #dce3de;
+  }
+  .page-title {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 20px;
+    font-weight: 700;
+    color: #1a202c;
+    margin-bottom: 4px;
+  }
+  .page-sub {
+    font-size: 12px;
+    color: #8a9590;
+    font-weight: 300;
+  }
+  .card {
+    background: #f7f9f7;
+    border: 1px solid #dce3de;
+    border-radius: 12px 16px 10px 14px;
+    padding: 28px;
+    box-shadow: 0 4px 20px rgba(26,32,44,0.02);
+  }
+  .data-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .data-row {
+    display: flex;
+    align-items: baseline;
+    padding: 14px 0;
+    border-bottom: 1px solid #e5ebe7;
+    gap: 16px;
+  }
+  .data-row:last-child {
+    border-bottom: none;
+  }
+  .data-label {
+    width: 100px;
+    font-size: 12px;
+    color: #8a9590;
+    font-weight: 300;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .data-label::before {
+    content: '';
+    width: 3px;
+    height: 16px;
+    border-radius: 2px;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .data-value {
+    flex: 1;
+    font-size: 14px;
+    color: #1a202c;
+    font-weight: 400;
+  }
+  .data-value.highlight {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 16px;
+    font-weight: 600;
+    color: #2d6a4f;
+  }
+  /* Tea-green monochrome bars */
+  .c-amt::before { background: #2d6a4f; }
+  .c-dept::before { background: #3d5a4a; }
+  .c-biz::before { background: #4d6a5a; }
+  .c-item::before { background: #5d7a6a; }
+  .c-contract::before { background: #6d8a7a; }
+  .c-id::before { background: #7d9a8a; }
+  .c-work::before { background: #8daaa0; }
+  .c-party::before { background: #9dbab0; }
+  .c-qty::before { background: #adcac0; }
+  .c-note::before { background: #8a9590; }
+
+  .log-panel {
+    margin-top: 20px;
+    background: #f7f9f7;
+    border: 1px solid #dce3de;
+    border-radius: 10px 12px 8px 14px;
+    padding: 20px;
+    font-size: 12px;
+    line-height: 2;
+    color: #8a9590;
+  }
+  .log-line {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+  }
+  .log-time {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 11px;
+    color: #a0aca4;
+    min-width: 56px;
+  }
+  .log-tag {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 500;
+  }
+  .log-tag.ok {
+    background: rgba(45,106,79,0.08);
+    color: #2d6a4f;
+  }
+  .log-tag.info {
+    background: rgba(138,149,144,0.08);
+    color: #8a9590;
+  }
+  .log-msg {
+    color: #4a5a54;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="sidebar">
+    <div class="logo">
+      审批自动化
+      <span>APPROVAL AUTOMATION</span>
+    </div>
+
+    <div class="status-card">
+      <div class="status-header">
+        <div class="status-dot"></div>
+        <div class="status-label">连接状态</div>
+      </div>
+      <div class="status-title">已连接</div>
+      <div class="status-sub">核心业务管理系统</div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn primary">开始审批</button>
+      <button class="btn">连接 Chrome</button>
+      <button class="btn">取消操作</button>
+    </div>
+
+    <div class="progress-wrap">
+      <div class="progress-label">
+        <span>审批进度</span>
+        <span>6 / 10</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="page-header">
+      <div class="page-title">审批详情预览</div>
+      <div class="page-sub">待处理事项 · 优先级高</div>
+    </div>
+
+    <div class="card">
+      <div class="data-list">
+        <div class="data-row">
+          <div class="data-label c-dept">部门</div>
+          <div class="data-value">资产管理部</div>
+        </div>
+        <div class="data-row">
+          <div class="data-label c-item">事项名称</div>
+          <div class="data-value">不良资产转让审批</div>
+        </div>
+        <div class="data-row">
+          <div class="data-label c-work">工作类型</div>
+          <div class="data-value">常规审批</div>
+        </div>
+        <div class="data-row">
+          <div class="data-label c-biz">业务类型</div>
+          <div class="data-value">金融不良资产</div>
+        </div>
+        <div class="data-row">
+          <div class="data-label c-party">交易对手</div>
+          <div class="data-value">某某信托公司</div>
+        </div>
+        <div class="data-row">
+          <div class="data-label c-amt">合同金额</div>
+          <div class="data-value highlight">¥12,500,000.00</div>
+        </div>
+        <div class="data-row">
+          <div class="data-label c-contract">合同名称</div>
+          <div class="data-value">不良资产批量转让协议</div>
+        </div>
+        <div class="data-row">
+          <div class="data-label c-id">合同编号</div>
+          <div class="data-value">AMC-2026-0429-001</div>
+        </div>
+        <div class="data-row">
+          <div class="data-label c-qty">数量</div>
+          <div class="data-value">3</div>
+        </div>
+        <div class="data-row">
+          <div class="data-label c-note">备注</div>
+          <div class="data-value">优先级高，请尽快处理</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="log-panel">
+      <div class="log-line">
+        <span class="log-time">09:41</span>
+        <span class="log-tag ok">完成</span>
+        <span class="log-msg">Chrome 已连接</span>
+      </div>
+      <div class="log-line">
+        <span class="log-time">09:41</span>
+        <span class="log-tag ok">完成</span>
+        <span class="log-msg">页面标题验证通过</span>
+      </div>
+      <div class="log-line">
+        <span class="log-time">09:42</span>
+        <span class="log-tag info">信息</span>
+        <span class="log-msg">发现 10 个待处理事项</span>
+      </div>
+      <div class="log-line">
+        <span class="log-time">09:42</span>
+        <span class="log-tag ok">完成</span>
+        <span class="log-msg">第 1 项提交成功</span>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

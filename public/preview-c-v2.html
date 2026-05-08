@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Preview C v2 - 一次性审批流程</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #f0f2f0;
+    color: #1a202c;
+    height: 100vh;
+    overflow: hidden;
+    font-size: 14px;
+    line-height: 1.8;
+  }
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg width='200' height='200' viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+  .app {
+    display: flex;
+    height: 100vh;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 300px;
+    padding: 28px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .logo {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 22px;
+    font-weight: 700;
+    color: #1a202c;
+    letter-spacing: 0.1em;
+  }
+  .logo span {
+    font-size: 11px;
+    font-family: 'Noto Sans SC', sans-serif;
+    font-weight: 300;
+    color: #8a9590;
+    display: block;
+    margin-top: 4px;
+    letter-spacing: 0.15em;
+  }
+
+  /* Steps */
+  .steps {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 16px;
+    background: #f7f9f7;
+    border: 1px solid #dce3de;
+    border-radius: 10px;
+  }
+  .step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .step-icon {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    background: #e5ebe7;
+    color: #8a9590;
+    transition: all 0.4s ease;
+  }
+  .step.completed .step-icon {
+    background: #5d7a6a;
+    color: #fff;
+  }
+  .step.active .step-icon {
+    background: #2d6a4f;
+    color: #fff;
+    box-shadow: 0 0 0 3px rgba(45,106,79,0.15);
+  }
+  .step-label {
+    font-size: 10px;
+    color: #8a9590;
+    white-space: nowrap;
+    transition: color 0.4s ease;
+  }
+  .step.completed .step-label,
+  .step.active .step-label {
+    color: #4a5a54;
+    font-weight: 500;
+  }
+  .step-line {
+    flex: 1;
+    height: 2px;
+    background: #e5ebe7;
+    min-width: 16px;
+    border-radius: 1px;
+    transition: background 0.4s ease;
+  }
+  .step-line.completed {
+    background: #5d7a6a;
+  }
+
+  /* Status Card */
+  .status-card {
+    background: #f7f9f7;
+    border: 1px solid #dce3de;
+    border-radius: 12px 16px 10px 14px;
+    padding: 20px;
+    box-shadow: 0 4px 20px rgba(26,32,44,0.03);
+  }
+  .status-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #2d6a4f;
+    position: relative;
+  }
+  .status-dot.pulse::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 1px solid rgba(45,106,79,0.25);
+    animation: ripple 2s ease-out infinite;
+  }
+  @keyframes ripple {
+    0% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(1.8); opacity: 0; }
+  }
+  .status-label { font-size: 12px; color: #8a9590; font-weight: 300; }
+  .status-title { font-family: 'Noto Serif SC', serif; font-size: 18px; color: #2d6a4f; font-weight: 600; }
+  .status-sub { font-size: 12px; color: #8a9590; margin-top: 4px; font-weight: 300; }
+
+  .btn-group { display: flex; flex-direction: column; gap: 10px; }
+  .btn {
+    padding: 12px 20px;
+    border: 1px solid #c8d2cc;
+    background: #f7f9f7;
+    color: #1a202c;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 8px 10px 8px 12px;
+    transition: all 0.3s ease;
+    text-align: center;
+    font-weight: 400;
+  }
+  .btn:hover {
+    background: #fff;
+    border-color: #2d6a4f;
+    color: #2d6a4f;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(45,106,79,0.08);
+  }
+  .btn.primary {
+    background: #2d6a4f;
+    color: #f7f9f7;
+    border-color: #2d6a4f;
+    font-weight: 500;
+  }
+  .btn.primary:hover {
+    background: #3d7a5f;
+    color: #fff;
+    box-shadow: 0 6px 16px rgba(45,106,79,0.18);
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  /* Main */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .main-content {
+    flex: 1;
+    padding: 32px 40px;
+    overflow-y: auto;
+  }
+  .page-header {
+    margin-bottom: 28px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #dce3de;
+  }
+  .page-title {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 20px;
+    font-weight: 700;
+    color: #1a202c;
+    margin-bottom: 4px;
+  }
+  .page-sub { font-size: 12px; color: #8a9590; font-weight: 300; }
+
+  .card {
+    background: #f7f9f7;
+    border: 1px solid #dce3de;
+    border-radius: 12px 16px 10px 14px;
+    padding: 28px;
+    box-shadow: 0 4px 20px rgba(26,32,44,0.02);
+  }
+  .data-list { display: flex; flex-direction: column; gap: 0; }
+  .data-row {
+    display: flex;
+    align-items: baseline;
+    padding: 14px 0;
+    border-bottom: 1px solid #e5ebe7;
+    gap: 16px;
+  }
+  .data-row:last-child { border-bottom: none; }
+  .data-label {
+    width: 100px;
+    font-size: 12px;
+    color: #8a9590;
+    font-weight: 300;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .data-label::before {
+    content: '';
+    width: 3px;
+    height: 16px;
+    border-radius: 2px;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .data-value { flex: 1; font-size: 14px; color: #1a202c; font-weight: 400; }
+  .data-value.highlight { font-family: 'Noto Serif SC', serif; font-size: 16px; font-weight: 600; color: #2d6a4f; }
+
+  /* Tea-green monochrome bars */
+  .c-amt::before { background: #2d6a4f; }
+  .c-dept::before { background: #3d5a4a; }
+  .c-biz::before { background: #4d6a5a; }
+  .c-item::before { background: #5d7a6a; }
+  .c-contract::before { background: #6d8a7a; }
+  .c-id::before { background: #7d9a8a; }
+  .c-work::before { background: #8daaa0; }
+  .c-party::before { background: #9dbab0; }
+  .c-qty::before { background: #adcac0; }
+  .c-note::before { background: #8a9590; }
+
+  /* Empty State */
+  .empty-state {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 100px 40px;
+    text-align: center;
+  }
+  .empty-state.show { display: flex; }
+  .empty-icon {
+    width: 80px;
+    height: 80px;
+    margin-bottom: 24px;
+    color: #c8d2cc;
+  }
+  .empty-title {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 18px;
+    color: #4a5a54;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .empty-sub {
+    font-size: 13px;
+    color: #8a9590;
+    font-weight: 300;
+  }
+
+  /* Skeleton Loading */
+  .skeleton {
+    display: none;
+    flex-direction: column;
+    gap: 16px;
+    padding: 8px 0;
+  }
+  .skeleton.show { display: flex; }
+  .skeleton-row {
+    height: 48px;
+    border-radius: 8px;
+    background: linear-gradient(90deg, #f7f9f7 25%, #eef1ee 50%, #f7f9f7 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.6s infinite;
+  }
+  .skeleton-row:nth-child(2) { animation-delay: 0.1s; width: 92%; }
+  .skeleton-row:nth-child(3) { animation-delay: 0.2s; width: 85%; }
+  .skeleton-row:nth-child(4) { animation-delay: 0.3s; width: 96%; }
+  .skeleton-row:nth-child(5) { animation-delay: 0.4s; width: 78%; }
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* Log Drawer */
+  .log-drawer {
+    border-top: 1px solid #dce3de;
+    background: #f7f9f7;
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .log-drawer.collapsed .log-body {
+    max-height: 0;
+    opacity: 0;
+    padding: 0 24px;
+  }
+  .log-drawer.collapsed {
+    background: #f0f2f0;
+  }
+  .log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 24px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s;
+  }
+  .log-header:hover { background: rgba(45,106,79,0.03); }
+  .log-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: #8a9590;
+  }
+  .log-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #8a9590;
+  }
+  .log-dot.active { background: #2d6a4f; }
+  .log-dot.error { background: #b33a3a; }
+  .log-latest {
+    font-size: 12px;
+    color: #4a5a54;
+    max-width: 400px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .log-toggle {
+    font-size: 16px;
+    color: #8a9590;
+    transition: transform 0.3s ease;
+  }
+  .log-drawer.collapsed .log-toggle {
+    transform: rotate(-90deg);
+  }
+  .log-body {
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 0 24px 16px;
+    opacity: 1;
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .log-line {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    padding: 4px 0;
+  }
+  .log-time {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 11px;
+    color: #a0aca4;
+    min-width: 56px;
+  }
+  .log-tag {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+  .log-tag.ok { background: rgba(45,106,79,0.08); color: #2d6a4f; }
+  .log-tag.info { background: rgba(138,149,144,0.08); color: #8a9590; }
+  .log-tag.error { background: rgba(180,60,60,0.08); color: #b33a3a; }
+  .log-msg { color: #4a5a54; font-size: 12px; }
+
+  .countdown {
+    font-size: 11px;
+    color: #8a9590;
+    margin-top: 8px;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .countdown.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="sidebar">
+    <div class="logo">
+      审批自动化
+      <span>APPROVAL AUTOMATION</span>
+    </div>
+
+    <div class="steps" id="stepBar">
+      <div class="step active" data-idx="0">
+        <div class="step-icon">&#10003;</div>
+        <div class="step-label">连接</div>
+      </div>
+      <div class="step-line" data-idx="0"></div>
+      <div class="step" data-idx="1">
+        <div class="step-icon">2</div>
+        <div class="step-label">提取</div>
+      </div>
+      <div class="step-line" data-idx="1"></div>
+      <div class="step" data-idx="2">
+        <div class="step-icon">3</div>
+        <div class="step-label">提交</div>
+      </div>
+      <div class="step-line" data-idx="2"></div>
+      <div class="step" data-idx="3">
+        <div class="step-icon">4</div>
+        <div class="step-label">完成</div>
+      </div>
+    </div>
+
+    <div class="status-card">
+      <div class="status-header">
+        <div class="status-dot" id="statusDot"></div>
+        <div class="status-label">连接状态</div>
+      </div>
+      <div class="status-title" id="statusTitle">未连接</div>
+      <div class="status-sub" id="statusSub">请连接 Chrome 后开始</div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn primary" id="btnStart" onclick="startApproval()" disabled>开始审批</button>
+      <button class="btn" id="btnConnect" onclick="connectChrome()">连接 Chrome</button>
+      <button class="btn" onclick="cancelFlow()">取消操作</button>
+    </div>
+
+    <div class="view-toggle" id="viewToggle" style="display:none; margin-top:12px;">
+      <div style="font-size:11px; color:#8a9590; margin-bottom:6px;">视图切换</div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn" id="btnViewData" onclick="switchView('data')" style="flex:1; padding:8px; font-size:12px;">查看详情</button>
+        <button class="btn" id="btnViewEmpty" onclick="switchView('empty')" style="flex:1; padding:8px; font-size:12px;">空状态</button>
+      </div>
+    </div>
+
+    <div class="countdown" id="countdown"></div>
+  </div>
+
+  <div class="main">
+    <div class="main-content">
+      <div class="page-header">
+        <div class="page-title" id="pageTitle">审批详情预览</div>
+        <div class="page-sub" id="pageSub">等待开始</div>
+      </div>
+
+      <!-- Empty State -->
+      <div id="view-empty" class="empty-state show">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 8v13H3V8"/>
+            <path d="M1 3h22v5H1z"/>
+            <path d="M10 12h4"/>
+          </svg>
+        </div>
+        <div class="empty-title">暂无提取数据</div>
+        <div class="empty-sub">连接 Chrome 后点击左侧「开始审批」</div>
+      </div>
+
+      <!-- Skeleton Loading -->
+      <div id="view-loading" class="skeleton">
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+      </div>
+
+      <!-- Data View -->
+      <div id="view-data" class="card" style="display:none;">
+        <div class="data-list">
+          <div class="data-row"><div class="data-label c-dept">部门</div><div class="data-value">资产管理部</div></div>
+          <div class="data-row"><div class="data-label c-item">事项名称</div><div class="data-value">不良资产转让审批</div></div>
+          <div class="data-row"><div class="data-label c-work">工作类型</div><div class="data-value">常规审批</div></div>
+          <div class="data-row"><div class="data-label c-biz">业务类型</div><div class="data-value">金融不良资产</div></div>
+          <div class="data-row"><div class="data-label c-party">交易对手</div><div class="data-value">某某信托公司</div></div>
+          <div class="data-row"><div class="data-label c-amt">合同金额</div><div class="data-value highlight">&yen;12,500,000.00</div></div>
+          <div class="data-row"><div class="data-label c-contract">合同名称</div><div class="data-value">不良资产批量转让协议</div></div>
+          <div class="data-row"><div class="data-label c-id">合同编号</div><div class="data-value">AMC-2026-0429-001</div></div>
+          <div class="data-row"><div class="data-label c-qty">数量</div><div class="data-value">3</div></div>
+          <div class="data-row"><div class="data-label c-note">备注</div><div class="data-value">优先级高，请尽快处理</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Log Drawer -->
+    <div class="log-drawer collapsed" id="logDrawer">
+      <div class="log-header" onclick="toggleLog()">
+        <div class="log-header-left">
+          <div class="log-dot" id="logDot"></div>
+          <span>系统日志</span>
+          <span class="log-latest" id="logLatest">等待操作...</span>
+        </div>
+        <div class="log-toggle">&#9662;</div>
+      </div>
+      <div class="log-body" id="logBody"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let autoResetTimer = null;
+  let countdownTimer = null;
+  let remainingSec = 0;
+  let isConnected = false;
+  let hasExtractedData = false;
+
+  const els = {
+    empty: document.getElementById('view-empty'),
+    loading: document.getElementById('view-loading'),
+    data: document.getElementById('view-data'),
+    pageSub: document.getElementById('pageSub'),
+    statusDot: document.getElementById('statusDot'),
+    statusTitle: document.getElementById('statusTitle'),
+    statusSub: document.getElementById('statusSub'),
+    btnStart: document.getElementById('btnStart'),
+    btnConnect: document.getElementById('btnConnect'),
+    logBody: document.getElementById('logBody'),
+    logLatest: document.getElementById('logLatest'),
+    logDot: document.getElementById('logDot'),
+    countdown: document.getElementById('countdown'),
+  };
+
+  function showView(name) {
+    els.empty.classList.toggle('show', name === 'empty');
+    els.loading.classList.toggle('show', name === 'loading');
+    els.data.style.display = name === 'data' ? 'block' : 'none';
+    // Update toggle buttons
+    document.getElementById('btnViewData').classList.toggle('active-state', name === 'data');
+    document.getElementById('btnViewEmpty').classList.toggle('active-state', name === 'empty');
+  }
+
+  function switchView(name) {
+    if (!hasExtractedData) return;
+    clearTimers();
+    showView(name);
+    if (name === 'empty') {
+      els.pageSub.textContent = '审批数据已保留，可随时切回查看';
+    } else {
+      els.pageSub.textContent = '显示当前审批详情';
+    }
+  }
+
+  function updateSteps(stepIndex) {
+    document.querySelectorAll('.step').forEach((s, i) => {
+      s.classList.remove('completed', 'active');
+      if (i < stepIndex) s.classList.add('completed');
+      else if (i === stepIndex) s.classList.add('active');
+    });
+    document.querySelectorAll('.step-line').forEach((l, i) => {
+      l.classList.toggle('completed', i < stepIndex);
+    });
+  }
+
+  function addLog(msg, type) {
+    const time = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    const tagClass = type === 'ok' ? 'ok' : type === 'error' ? 'error' : 'info';
+    const tagText = type === 'ok' ? '完成' : type === 'error' ? '错误' : '信息';
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    line.innerHTML = `<span class="log-time">${time}</span><span class="log-tag ${tagClass}">${tagText}</span><span class="log-msg">${msg}</span>`;
+    els.logBody.appendChild(line);
+    els.logLatest.textContent = msg;
+    els.logDot.className = 'log-dot ' + (type === 'error' ? 'error' : 'active');
+    // Auto-expand on error
+    if (type === 'error') {
+      document.getElementById('logDrawer').classList.remove('collapsed');
+    }
+  }
+
+  function toggleLog() {
+    document.getElementById('logDrawer').classList.toggle('collapsed');
+  }
+
+  function clearTimers() {
+    if (autoResetTimer) { clearTimeout(autoResetTimer); autoResetTimer = null; }
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+    els.countdown.classList.remove('show');
+  }
+
+  function startCountdown() {
+    clearTimers();
+    remainingSec = 30;
+    els.countdown.classList.add('show');
+    els.countdown.textContent = `${remainingSec} 秒后自动收起...`;
+    countdownTimer = setInterval(() => {
+      remainingSec--;
+      if (remainingSec <= 0) {
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+      } else {
+        els.countdown.textContent = `${remainingSec} 秒后自动收起...`;
+      }
+    }, 1000);
+    autoResetTimer = setTimeout(() => {
+      // Auto-switch view to empty, but KEEP the data
+      showView('empty');
+      els.pageSub.textContent = '审批数据已保留，可随时切回查看';
+      els.countdown.classList.remove('show');
+    }, 30000);
+  }
+
+  function connectChrome() {
+    isConnected = true;
+    els.statusDot.classList.add('pulse');
+    els.statusTitle.textContent = '已连接';
+    els.statusSub.textContent = '核心业务管理系统';
+    els.btnStart.disabled = false;
+    els.btnConnect.textContent = '重新连接';
+    updateSteps(0);
+    addLog('Chrome 已连接', 'ok');
+    addLog('页面标题验证通过', 'ok');
+  }
+
+  function startApproval() {
+    if (!isConnected) return;
+    clearTimers();
+    els.btnStart.disabled = true;
+
+    // Step 1: extracting
+    updateSteps(1);
+    showView('loading');
+    els.pageSub.textContent = '正在从页面提取数据...';
+    addLog('开始提取审批数据', 'info');
+
+    setTimeout(() => {
+      // Step 2: review
+      hasExtractedData = true;
+      document.getElementById('viewToggle').style.display = 'block';
+      updateSteps(2);
+      showView('data');
+      els.pageSub.textContent = '数据已提取，等待提交';
+      addLog('数据提取完成', 'ok');
+      addLog('发现审批详情 1 条', 'info');
+      els.btnStart.disabled = false;
+      els.btnStart.textContent = '确认提交';
+      els.btnStart.onclick = submitApproval;
+
+      startCountdown();
+    }, 2000);
+  }
+
+  function submitApproval() {
+    clearTimers();
+    els.btnStart.disabled = true;
+    updateSteps(3);
+    els.pageSub.textContent = '正在提交审批...';
+    addLog('正在提交审批...', 'info');
+
+    setTimeout(() => {
+      // Mark last step completed
+      document.querySelectorAll('.step')[3].classList.add('completed');
+      document.querySelectorAll('.step-line')[2].classList.add('completed');
+      els.pageSub.textContent = '审批已提交';
+      addLog('审批提交成功', 'ok');
+      els.btnStart.textContent = '开始审批';
+      els.btnStart.onclick = startApproval;
+      els.btnStart.disabled = false;
+
+      // Auto-switch to empty view after 3s, but keep data
+      autoResetTimer = setTimeout(() => {
+        showView('empty');
+        els.pageSub.textContent = '审批数据已保留，可随时切回查看';
+      }, 3000);
+    }, 1500);
+  }
+
+  function cancelFlow() {
+    clearTimers();
+    resetToIdle();
+    addLog('操作已取消', 'info');
+  }
+
+  function resetToIdle() {
+    clearTimers();
+    hasExtractedData = false;
+    document.getElementById('viewToggle').style.display = 'none';
+    showView('empty');
+    updateSteps(0);
+    els.pageSub.textContent = isConnected ? '等待开始' : '请连接 Chrome 后开始';
+    els.btnStart.textContent = '开始审批';
+    els.btnStart.onclick = startApproval;
+    els.btnStart.disabled = !isConnected;
+  }
+</script>
+</body>
+</html>

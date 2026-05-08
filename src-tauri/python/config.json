@@ -1,0 +1,115 @@
+{
+  "cdp_endpoint": "http://localhost:9222",
+  "page_hint": "核心业务管理系统",
+  "url_hint": "10.0.0.1",
+  "approval": {
+    "pending_items_selector": ".pending-item",
+    "detail_link_selector": "a.detail-link",
+    "approve_button_selector": "button[name='通过'], button#wf_btn_2",
+    "confirm_button_selector": "button#buttonOK",
+    "final_confirm_button_selector": "button[name='selectPartjobOrgWinBtn']",
+    "comment_input_selector": "",
+    "comment_text": "同意",
+    "dept_select_text": "风险合规部",
+    "fields": {
+      "部门": "a.trust-workflow-tag-a, div.unit-value-text:has-text('[')",
+      "事项名称": "i#hsBpmDescTitle, #workflowFormDiv",
+      "工作类型": "i#hsBpmDescTitle, #workflowFormDiv",
+      "业务类型": "金融不良资产",
+      "数量": "1",
+      "备注": "div[name='fielditemSpecificDescID'] pre, div[name='fieldapply_remarkID']",
+      "交易对手": "",
+      "合同金额": "",
+      "合同名称": "",
+      "合同编号": ""
+    },
+    "field_transforms": {
+      "部门": {
+        "regex": "\\[(.*?)\\]",
+        "group": 1,
+        "attribute": "text"
+      },
+      "工作类型": {
+        "regex": "([\u4e00-\u9fa5]+审批流程)",
+        "group": 1,
+        "attribute": "text"
+      }
+    },
+    "dept_mapping": {
+      "资产经营一部": ["资产经营一部"],
+      "资产经营二部": ["资产经营二部"],
+      "资产经营三部": ["资产经营三部"],
+      "资产经营四部": ["资产经营四部"],
+      "资产经营五部": ["资产经营五部"],
+      "青岛业务部": ["青岛业务部"],
+      "投资银行部": ["投资银行部"],
+      "综合管理部": ["综合管理部"],
+      "财务管理部": ["财务管理部"],
+      "资金运作部": ["资金运作部"],
+      "青岛专班": ["青岛专班"],
+      "上海业务部": ["上海业务一部", "上海业务二部"],
+      "股权投资部": ["股权投资部"],
+      "山金不动产": ["山金不动产"]
+    },
+    "biz_type_options": [
+      "金融不良资产",
+      "市场化债转股",
+      "破产管理人",
+      "存量资产处置",
+      "非金不良资产",
+      "抵债资产",
+      "中介机构",
+      "信息化",
+      "抵债资产运营",
+      "行政类事项",
+      "其他",
+      "五大集团监管",
+      "合资公司管理",
+      "日照资产不良处置"
+    ],
+    "workflow_type_mapping": {
+      "业务审批/诉讼实体": ["业务通用审批", "诉讼实体性事项审批"],
+      "诉讼事务": ["诉讼事项文件用印审批流程"],
+      "合同审批": ["合同类审批"],
+      "用印审批": ["通用用印审批", "债权资料交接审核用印流程"],
+      "立项审批": ["立项"],
+      "资金支付": ["业务资金支出", "回款转付"]
+    }
+  },
+  "tencent_form": {
+    "form_url": "https://doc.weixin.qq.com/smartsheet/form/1_wpJjdZUAAArdGMgqM1mq79XaiVhz0RJA_5d2af1",
+    "field_mapping": {
+      "部门": "部门",
+      "事项名称": "事项名称",
+      "工作类型": "工作类型",
+      "业务类型": "业务类型",
+      "数量": "数量",
+      "备注": "备注",
+      "交易对手": "交易对手",
+      "合同金额": "合同金额",
+      "合同名称": "合同名称",
+      "合同编号": "合同编号"
+    },
+    "submit_button_text": "提交"
+  },
+  "webhook": {
+    "url": "https://qyapi.weixin.qq.com/cgi-bin/wedoc/smartsheet/webhook?key=2ziDHY8cUt9gT3TnnFMGtGxdMBpe8RMgorZvEpdeham6HpLcqIiQBdJe1wDwmyd1LygEbikDPuCQ2jYlY6fTj7lS1De8eRpDmgrGdNWzhc8F",
+    "schema": {
+      "time": "f736Lk",
+      "dept": "fVgYr2",
+      "title": "fa6P3k",
+      "biz_type": "fjTNHN",
+      "work_type": "fjXqjX",
+      "qty": "fxy0gT",
+      "remark": "fyY3Ni",
+      "counterparty": "fUCTwp",
+      "contract_amount": "fMAzZf",
+      "contract_name": "fp8OzH",
+      "contract_no": "fJ6kHY"
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "timeout": 10
+  }
+}

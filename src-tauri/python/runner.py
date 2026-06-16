@@ -116,9 +116,37 @@ def main():
             emit("error", msg="未找到有效标签页，请确认 Chrome 已启动 --remote-debugging-port=9222")
             return
 
-        page_hint = config.get("page_hint", "核心业务管理系统")
-        url_hint = config.get("url_hint", "")
+        # 日志输出所有候选标签页，方便排查匹配问题
+        emit("log", level="info", msg=f"发现 {len(candidates)} 个有效标签页:")
+        for c in candidates:
+            emit("log", level="info", msg=f"  [{c['index']}] {c['title']} | {c['url']}")
+
+        # 根据系统类型选择对应的页面匹配 hint
+        if args.oa_type == "old":
+            url_hint = "10.0.150.1"
+            page_hint = "核心业务管理系统"
+        elif args.oa_type == "new":
+            url_hint = ["10.0.0.1", "collaboration"]
+            page_hint = "鲁信集团OA内网门户"
+        else:
+            url_hint = config.get("url_hint", "")
+            page_hint = config.get("page_hint", "核心业务管理系统")
+
+        emit("log", level="info", msg=f"页面匹配策略: oa_type={args.oa_type}, url_hint={url_hint}, page_hint={page_hint}")
         page = browser.get_approval_page(url_hint=url_hint, title_hint=page_hint)
+
+        # 日志输出实际匹配到的页面
+        try:
+            matched_title = page.title() or "(无标题)"
+            matched_url = page.url or "(无URL)"
+        except Exception:
+            matched_title = "(未知)"
+            matched_url = "(未知)"
+        emit("log", level="info", msg=f"匹配到页面: {matched_title} | {matched_url}")
+        if url_hint:
+            hints = [url_hint] if isinstance(url_hint, str) else url_hint
+            if not all(h in matched_url for h in hints):
+                emit("log", level="warning", msg=f"警告: 匹配页面 URL 不包含期望的 url_hint {hints}")
 
         # 尝试定位 iframe（与原 run.py 保持一致的多策略兜底）
         approve_selector = config.get("approval", {}).get("approve_button_selector", "")
@@ -161,6 +189,26 @@ def main():
             data["数量"] = args.qty
             if args.biz_type:
                 data["业务类型"] = args.biz_type
+
+        # 数据校验：关键字段不能全部为空，防止提交空数据
+        KEY_FIELDS = ["事项名称", "部门", "工作类型"]
+        empty_records = []
+        for idx, data in enumerate(results):
+            key_values = {k: data.get(k, "").strip() for k in KEY_FIELDS}
+            if all(v == "" for v in key_values.values()):
+                empty_records.append(idx)
+                emit("log", level="error", msg=f"第 {idx + 1} 条记录关键字段全部为空: {key_values}")
+            else:
+                emit("log", level="info", msg=f"第 {idx + 1} 条记录提取结果: 事项名称='{key_values['事项名称']}', 部门='{key_values['部门']}', 工作类型='{key_values['工作类型']}'")
+
+        if empty_records:
+            # 如果全部为空，直接报错退出，不提交
+            if len(empty_records) == len(results):
+                emit("error", msg=f"所有 {len(results)} 条记录关键字段均为空，未找到有效审批数据，停止提交。请确认页面已加载完成且选择器匹配正确。")
+                return
+            # 如果只是部分为空，过滤掉空记录，继续提交有效的
+            emit("log", level="warning", msg=f"过滤掉 {len(empty_records)} 条空记录，继续提交剩余 {len(results) - len(empty_records)} 条")
+            results = [data for idx, data in enumerate(results) if idx not in empty_records]
 
         if args.test_mode:
             for data in results:

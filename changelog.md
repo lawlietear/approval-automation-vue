@@ -110,6 +110,25 @@
 3. **stdin 取消而非信号**：Windows 下 Python 信号处理不一致，通过 stdin 写入 `"cancel\n"` 更可靠。
 4. **扁平参数优先于结构体**：Tauri v2 的参数反序列化规则中，结构体参数需要前端用参数名包裹，而基本类型直接扁平映射。为保持前后端一致性，所有命令采用扁平参数。
 
+#### 2026-05-12 — 页面匹配与数据校验
+- **OA 系统页面匹配修复**：`runner.py` 中 New OA 的 `url_hint` 改为 `["10.0.0.1", "collaboration"]` 双条件 AND 匹配，避免匹配到 OA 首页而非审批详情页
+  - `browser.py` `get_approval_page()` 支持 `url_hint` 传入字符串或字符串列表，列表时要求所有 hint 同时满足
+  - `page_hint` 修正为 `"鲁信集团OA内网门户"`
+- **数据提交前校验**：`runner.py` 在提交前检查关键字段（`事项名称`、`部门`、`工作类型`），若全部为空则停止提交并输出错误日志，防止提交空数据
+
+#### 2026-05-12 — 绿色版打包脚本
+- 新增 `build-green.py`（Python 脚本替代 `.bat`），解决 Windows CMD 对 UTF-8 无 BOM 批处理文件的编码解析问题
+  - 自动检测 `npm` / `cargo` 路径（`shutil.which()`），无需用户手动配置环境变量
+  - 一键执行：环境检查 → PyInstaller → `npm run build` → `cargo build --release` → 资源复制 → 验证输出
+  - 输出目录：`dist_green/ApprovalTool.exe` + `python/dist/ApprovalRunner/`
+
+#### 2026-05-12 — 启动白屏修复
+- **根因定位**：`style.css` 中存在 `@import url('https://fonts.googleapis.com/...')`，打包后的 CSS 在 WebView2 中加载时会阻塞渲染，等待网络请求（2-3 秒），导致启动白屏
+  - ✅ **已删除** `style.css` 中的 Google Fonts `@import`
+- **加载动画**：`index.html` 内联纯 CSS loading 动画（脉冲光晕 + 三层反向旋转圆环 + 中心发光点 + 渐变文字），不依赖任何外部资源或 JS
+- **最小显示时间**：`App.vue` `onMounted` 中强制 loader 至少显示 1.2 秒后再淡出，避免 JS 加载过快导致动画一闪而过
+- **窗口背景兜底**：`tauri.conf.json` 新增 `"backgroundColor": "#0f0f0f"`，确保 WebView2 初始化完成前窗口背景为深色而非白色
+
 ### 待解决
 - [ ] 端到端完整流程测试（连接 Chrome → 提取数据 → 提交 → 完成）
 - [x] Tauri 打包发布：Python + Playwright 需要随 exe 分发（pyinstaller 或 resources 方案）

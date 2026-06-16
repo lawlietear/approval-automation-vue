@@ -69,11 +69,11 @@ class BrowserHelper:
                 global_idx += 1
         return results
 
-    def get_approval_page(self, url_hint: str = None, title_hint: str = None) -> Page:
+    def get_approval_page(self, url_hint = None, title_hint: str = None) -> Page:
         """
         获取当前最可能是审批页面的标签页。
         优先顺序：
-        1. url_hint 匹配 URL
+        1. url_hint 匹配 URL（支持字符串或字符串列表，列表表示 AND 关系）
         2. title_hint 匹配页面标题
         3. 最后一个有效页面
         """
@@ -82,8 +82,9 @@ class BrowserHelper:
             raise RuntimeError("未在 Chrome 中找到任何有效标签页，请确认已用 --remote-debugging-port=9222 启动 Chrome 并打开了审批页面。")
 
         if url_hint:
+            hints = [url_hint] if isinstance(url_hint, str) else url_hint
             for c in candidates:
-                if url_hint in c["url"]:
+                if all(h in c["url"] for h in hints):
                     return c["page"]
 
         if title_hint:
@@ -240,7 +241,7 @@ class BrowserHelper:
                         let s = 0;
                         for (const el of spans) {
                             const t = el.textContent.trim();
-                            if (t === '合同金额：' || t === '合同名称：' || t === '合同ID：') s += 10;
+                            if (t === '合同金额：' || t === '合同名称：' || t === '合同ID：' || t === '纸质合同编号：') s += 10;
                             else if (t.includes('合同')) s += 1;
                         }
                         return s;
@@ -270,7 +271,7 @@ class BrowserHelper:
                                 let s = 0;
                                 for (const el of spans) {
                                     const t = el.textContent.trim();
-                                    if (t === '合同金额：' || t === '合同名称：' || t === '合同ID：') s += 10;
+                                    if (t === '合同金额：' || t === '合同名称：' || t === '合同ID：' || t === '纸质合同编号：') s += 10;
                                     else if (t.includes('合同')) s += 1;
                                 }
                                 return s;
@@ -318,7 +319,7 @@ class BrowserHelper:
 
                 if label == "合同金额：":
                     result["合同金额"] = val
-                elif label in ("合同ID：", "纸质合同编号："):
+                elif label == "纸质合同编号：":
                     if not result.get("合同编号"):
                         result["合同编号"] = val
                 elif label == "合同名称：":

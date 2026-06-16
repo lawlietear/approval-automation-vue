@@ -142,6 +142,15 @@ const handleSwitchView = (v: 'empty' | 'data') => {
 let unlisteners: UnlistenFn[] = []
 
 onMounted(async () => {
+  // Vue DOM 已渲染，确保 loading 动画至少显示 1.2 秒后再淡出
+  const loader = document.getElementById('loader')
+  if (loader) {
+    setTimeout(() => {
+      loader.classList.add('hide')
+      setTimeout(() => loader.remove(), 500)
+    }, 1200)
+  }
+
   unlisteners.push(await listen('approval:log', (e: any) => {
     addLog(e.payload.msg, e.payload.level || 'info')
   }))

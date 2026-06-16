@@ -19,6 +19,12 @@ src-tauri/target/
 src-tauri/python/dist/
 src-tauri/python/build/
 *.spec
+__pycache__/
+*.pyc
+
+# OS files
+Thumbs.db
+desktop.ini
 
 # Editor directories and files
 .vscode/*

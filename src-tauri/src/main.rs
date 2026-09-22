@@ -15,6 +15,13 @@ struct ApprovalState {
 /// 在工作目录及可执行文件周边探测 runner 路径
 /// Prod 模式优先使用 resolve_resource 定位打包后的 ApprovalRunner.exe
 fn find_runner_py(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    #[cfg(debug_assertions)]
+    for candidate in ["python/runner.py", "src-tauri/python/runner.py"] {
+        let path = std::path::PathBuf::from(candidate);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
     // 1. Prod 模式：尝试 resolve_resource 定位打包的 exe
     if let Ok(path) = app.path().resolve(
         "python/dist/ApprovalRunner/ApprovalRunner.exe",
@@ -65,6 +72,13 @@ fn find_runner_py(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 
 /// 探测 config.json 路径：优先使用传入路径，再回退到 runner.py 同级目录
 fn find_config_json(app: &AppHandle, preferred: &str) -> Result<std::path::PathBuf, String> {
+    #[cfg(debug_assertions)]
+    for candidate in [preferred, "python/config.json", "src-tauri/python/config.json"] {
+        let path = std::path::PathBuf::from(candidate);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
     // 1. Prod 模式：尝试打包资源中 exe 同级目录的 config.json
     if let Ok(exe) = app.path().resolve(
         "python/dist/ApprovalRunner/ApprovalRunner.exe",
@@ -283,6 +297,125 @@ async fn get_config(
 }
 
 // ── 取消审批流程 ──
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PushSettings {
+    wechat_enabled: bool,
+    obsidian_enabled: bool,
+    obsidian_directory: String,
+    #[serde(default)]
+    wechat_url: Option<String>,
+    #[serde(default)]
+    wechat_schema: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    wechat_timeout: Option<u32>,
+}
+
+#[tauri::command]
+async fn get_push_settings(app: AppHandle, config_path: String) -> Result<PushSettings, String> {
+    let config = find_config_json(&app, &config_path)?;
+    let path = config.with_file_name("push-settings.json");
+    let text = tokio::fs::read_to_string(&config).await.map_err(|e| e.to_string())?;
+    let config: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let mut settings: PushSettings = if path.exists() {
+        let text = tokio::fs::read_to_string(path).await.map_err(|e| e.to_string())?;
+        serde_json::from_str(&text).map_err(|e| format!("登记设置读取失败: {}", e))?
+    } else {
+        PushSettings {
+            wechat_enabled: config["webhook"]["enabled"].as_bool().unwrap_or(true),
+            obsidian_enabled: false,
+            obsidian_directory: String::new(),
+            wechat_url: None,
+            wechat_schema: None,
+            wechat_timeout: None,
+        }
+    };
+    settings.wechat_url.get_or_insert_with(|| config["webhook"]["url"].as_str().unwrap_or("").to_string());
+    settings.wechat_schema.get_or_insert_with(|| {
+        config["webhook"]["schema"].as_object().map(|fields| fields.iter()
+            .filter_map(|(key, value)| value.as_str().map(|v| (key.clone(), v.to_string())))
+            .collect()).unwrap_or_default()
+    });
+    settings.wechat_timeout.get_or_insert(config["webhook"]["timeout"].as_u64().unwrap_or(10) as u32);
+    Ok(settings)
+}
+
+#[tauri::command]
+async fn save_push_settings(
+    app: AppHandle,
+    config_path: String,
+    mut settings: PushSettings,
+    state: State<'_, ApprovalState>,
+) -> Result<(), String> {
+    let mut guard = state.child.lock().await;
+    if let Some(child) = guard.as_mut() {
+        if child.try_wait().map_err(|e| e.to_string())?.is_none() {
+            return Err("审批运行期间不能修改登记设置".into());
+        }
+    }
+    settings.obsidian_directory = settings.obsidian_directory.trim().to_string();
+    if let Some(url) = settings.wechat_url.as_mut() { *url = url.trim().to_string(); }
+    if let Some(schema) = settings.wechat_schema.as_mut() {
+        for value in schema.values_mut() { *value = value.trim().to_string(); }
+        schema.retain(|_, value| !value.is_empty());
+        let distinct: std::collections::BTreeSet<_> = schema.values().collect();
+        if distinct.len() != schema.len() { return Err("不同登记字段不能使用同一个字段标识".into()); }
+    }
+    if !(1..=120).contains(&settings.wechat_timeout.unwrap_or(10)) {
+        return Err("请求超时时间须为 1 至 120 秒".into());
+    }
+    if settings.wechat_enabled {
+        let url = settings.wechat_url.as_deref().unwrap_or("");
+        let parsed = tauri::Url::parse(url).map_err(|_| "请填写有效的企业微信智能表格 Webhook 链接")?;
+        if parsed.scheme() != "https" || parsed.host_str() != Some("qyapi.weixin.qq.com")
+            || parsed.path() != "/cgi-bin/wedoc/smartsheet/webhook"
+            || !parsed.query_pairs().any(|(key, value)| key == "key" && !value.is_empty()) {
+            return Err("请使用企业微信智能表格 Webhook 链接，不是表格浏览链接或群机器人链接".into());
+        }
+        if settings.wechat_schema.as_ref().and_then(|s| s.get("title")).map_or(true, |s| s.is_empty()) {
+            return Err("请配置项目名称对应的字段标识；其他字段可留空不登记".into());
+        }
+    }
+    if settings.obsidian_enabled {
+        let directory = std::path::Path::new(&settings.obsidian_directory);
+        if !directory.is_absolute() || !directory.is_dir() {
+            return Err("请选择存在的 Obsidian 记录文件夹，不能选择 .base 文件".into());
+        }
+    }
+    let path = find_config_json(&app, &config_path)?.with_file_name("push-settings.json");
+    let temp = path.with_extension("json.tmp");
+    let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    tokio::fs::write(&temp, content).await.map_err(|e| format!("无法保存登记设置: {}", e))?;
+    tokio::fs::rename(temp, path).await.map_err(|e| format!("无法替换登记设置: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn select_obsidian_directory() -> Result<Option<String>, String> {
+    // Use the built-in Windows folder dialog without another runtime dependency.
+    let script = r#"
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        Add-Type -AssemblyName System.Windows.Forms
+        $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dialog.Description = '选择 Obsidian 流程审核记录文件夹（不是 .base 文件）'
+        try {
+            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                [Console]::Write($dialog.SelectedPath)
+            }
+        } finally { $dialog.Dispose() }
+    "#;
+    let mut command = tokio::process::Command::new("powershell.exe");
+    command.args(["-NoProfile", "-STA", "-Command", script]);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let output = command.output().await.map_err(|e| format!("无法打开目录选择器: {}", e))?;
+    if !output.status.success() {
+        return Err("目录选择器启动失败，可手动输入目录路径".into());
+    }
+    let directory = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+    let directory = directory.trim().to_string();
+    Ok(if directory.is_empty() { None } else { Some(directory) })
+}
+
 #[tauri::command]
 async fn cancel_approval(state: State<'_, ApprovalState>) -> Result<(), String> {
     let tx = {
@@ -315,6 +448,9 @@ fn main() {
             start_approval,
             cancel_approval,
             get_config,
+            get_push_settings,
+            save_push_settings,
+            select_obsidian_directory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -21,7 +21,7 @@ const isConnected = ref(false)
 const stepIndex = ref(-1)
 const view = ref<'empty' | 'loading' | 'data'>('empty')
 const hasExtractedData = ref(false)
-const pageSub = ref('connect chrome to begin')
+const pageSub = ref('从左侧连接浏览器，开始审批')
 const isRunning = ref(false)
 
 // Data
@@ -75,7 +75,7 @@ const handleConnect = async () => {
     const wasConnected = isConnected.value
     isConnected.value = true
     stepIndex.value = 0
-    pageSub.value = 'waiting...'
+    pageSub.value = '已连接，等待选择审批系统'
     if (!wasConnected) {
       addLog('chrome connected', 'ok')
       addLog('page title verified', 'ok')
@@ -160,7 +160,7 @@ onMounted(async () => {
     hasExtractedData.value = true
     stepIndex.value = 2
     view.value = 'data'
-    pageSub.value = 'extracted. submitting...'
+    pageSub.value = '已提取，正在登记…'
     addLog('data extraction complete', 'ok')
   }))
 
@@ -168,11 +168,21 @@ onMounted(async () => {
     addLog('approval submitted successfully', 'ok')
   }))
 
-  unlisteners.push(await listen('approval:all_done', () => {
+  unlisteners.push(await listen('approval:all_done', (e: any) => {
     stepIndex.value = 4
     isRunning.value = false
-    pageSub.value = 'approval submitted'
-    startCountdown()
+    const result = e.payload
+    if (result.cancelled) {
+      pageSub.value = '流程已取消，请核对已登记记录'
+    } else if (result.registration_enabled === false) {
+      pageSub.value = '审批处理完成，登记通道已关闭'
+    } else if (result.success_count === result.count) {
+      pageSub.value = `登记完成：${result.success_count} 条`
+      startCountdown()
+    } else {
+      pageSub.value = `部分登记未完成：${result.success_count}/${result.count} 条全部通道成功，请查看日志`
+      addLog(pageSub.value, 'error')
+    }
   }))
 
   unlisteners.push(await listen('approval:error', (e: any) => {

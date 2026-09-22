@@ -42,8 +42,9 @@ const props = defineProps<{
             <path d="M10 12h4"/>
           </svg>
         </div>
-        <div class="empty-title">no data</div>
-        <div class="empty-sub">connect chrome and choose a system to start</div>
+        <div class="empty-title">准备好，开始下一条审批</div>
+        <div class="empty-sub">连接 Chrome，选择系统。提取的数据将在这里显示。</div>
+        <div class="empty-guide"><span>01 / 连接浏览器</span><span>02 / 核对登记设置</span><span>03 / 开始审批</span></div>
       </div>
 
       <div v-else-if="view === 'loading'" class="skeleton show">
@@ -62,7 +63,7 @@ const props = defineProps<{
             :key="f.key"
             class="data-row"
           >
-            <div class="data-label" :class="f.barClass">{{ f.label }}</div>
+            <div class="data-label" :class="f.barClass">{{ f.key }}</div>
             <div class="data-value" :class="{ highlight: f.highlight }" :title="dataMap[f.key] || ''">
               {{ dataMap[f.key] || '-' }}
             </div>
@@ -200,6 +201,7 @@ const props = defineProps<{
 .empty-sub {
   animation: fade-up 0.6s ease-out 0.15s both;
 }
+.empty-guide { display: grid; gap: 12px; margin-top: 32px; padding: 20px 24px; border: 1px solid var(--border); border-radius: 10px; text-align: left; color: var(--text-secondary); font-size: 12px; }
 @keyframes float-y {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-8px); }

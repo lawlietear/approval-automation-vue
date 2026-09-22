@@ -33,8 +33,8 @@ sys.stdout = sys.stderr
 
 from src.browser import BrowserHelper
 from src.approver import ApprovalHelper
-from src.tencent_form import TencentFormHelper
 from src.webhook import WebhookHelper
+from src.registration import Registration, load_settings, apply_wechat_settings
 
 
 def emit(event_type, **kwargs):
@@ -104,10 +104,15 @@ def main():
         log_callback=log_callback,
         oa_type=args.oa_type,
     )
-    webhook_helper = WebhookHelper(config)
-    form_helper = TencentFormHelper(browser, config)
 
     try:
+        settings = load_settings(args.config, config)
+        apply_wechat_settings(args.config, config)
+        webhook_helper = WebhookHelper(config)
+        registration = Registration(settings, webhook_helper, log_callback)
+        if not args.test_mode:
+            registration.validate()
+        emit("log", level="info", msg=f"登记设置: 企业微信={'开' if settings['wechat_enabled'] else '关'}，Obsidian={'开' if settings['obsidian_enabled'] else '关'}")
         emit("log", level="info", msg="正在连接 Chrome...")
         browser.connect()
 
@@ -225,22 +230,19 @@ def main():
 
             emit("data_extracted", data=data)
 
-            ok = False
-            if webhook_helper.url:
-                ok = webhook_helper.submit(data)
-                if not ok:
-                    emit("log", level="warning", msg="Webhook 失败，尝试腾讯表格...")
-                    ok = form_helper.submit(data, context=browser.context)
-            else:
-                ok = form_helper.submit(data, context=browser.context)
-
-            if ok:
+            outcomes = registration.submit(data)
+            emit("registration_result", idx=idx, channels=outcomes)
+            if outcomes and all(outcomes.values()):
                 success_count += 1
                 emit("submit_success", idx=idx, data=data)
-            else:
+            elif outcomes:
                 emit("log", level="error", msg=f"第 {idx + 1} 条数据提交失败")
+            else:
+                emit("log", level="info", msg="所有登记通道已关闭，本条仅执行审批与提取")
 
-        emit("all_done", count=len(results), success_count=success_count)
+        emit("all_done", count=len(results), success_count=success_count,
+             registration_enabled=settings["wechat_enabled"] or settings["obsidian_enabled"],
+             cancelled=cancelled.is_set())
 
     except Exception as e:
         import traceback

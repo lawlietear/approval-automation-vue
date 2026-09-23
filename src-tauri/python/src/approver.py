@@ -2,6 +2,7 @@ from playwright.sync_api import Page
 from .browser import BrowserHelper
 import time
 import re
+import json
 
 
 class ApprovalHelper:
@@ -234,8 +235,6 @@ class ApprovalHelper:
             self._log(f"[错误] 点击同意失败: {e}", "error")
             return [data]
 
-        page.wait_for_timeout(1000)
-
         # 处理确认/评论框
         comment_selector = self.approval_cfg.get("comment_input_selector", "")
         confirm_selector = self.approval_cfg.get("confirm_button_selector", "")
@@ -243,7 +242,6 @@ class ApprovalHelper:
 
         if comment_selector:
             try:
-                page.wait_for_selector(comment_selector, state="visible", timeout=3000)
                 self.browser.safe_fill(page, comment_selector, comment_text, timeout=3000)
                 self._log(f"  [操作] 填写意见: {comment_text}")
             except Exception as e:
@@ -255,8 +253,7 @@ class ApprovalHelper:
                 self._log("  [操作] 点击确认成功")
             except Exception as e:
                 self._log(f"[错误] 点击确认失败: {e}", "error")
-
-        page.wait_for_timeout(1500)
+                raise RuntimeError("确认窗口未就绪，已停止后续点击和登记") from e
 
         # 处理可能的后续页面（如选择下一步处理人等）
         self._handle_subsequent_pages(page)
@@ -275,143 +272,63 @@ class ApprovalHelper:
 
         return records
 
-    def _handle_subsequent_pages(self, page: Page):
-        """
-        点击确认后，后续两步流程：
-        1. 点击"风险合规部"
-        2. 再次点击"确定"
+    def _wait_click(self, contexts, locator_for, label, timeout=5000):
+        """Poll all contexts against one deadline; never retry a dispatched click."""
+        deadline = time.monotonic() + timeout / 1000
+        while time.monotonic() < deadline:
+            candidates = []
+            for ctx, name in contexts:
+                for loc in locator_for(ctx).filter(visible=True).all():
+                    if loc.is_enabled():
+                        candidates.append((ctx, name, loc))
+            # A duplicate visible target is ambiguous, not a reason to click first.
+            if len(candidates) == 1:
+                ctx, name, loc = candidates[0]
+                remaining = max(1, int((deadline - time.monotonic()) * 1000))
+                try:
+                    loc.click(trial=True, timeout=min(200, remaining))
+                except Exception:
+                    pass
+                else:
+                    remaining = max(1, int((deadline - time.monotonic()) * 1000))
+                    loc.click(timeout=remaining)
+                    self._log(f"  [操作] {label}（{name}）")
+                    return ctx
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(0.05, remaining))
+        raise RuntimeError(f"{label}等待超时或存在多个可见目标，已停止后续点击和登记")
 
-        说明：
-        - 第一步"确定"已经在 _process_detail 中点击过了
-        - 弹出层可能在主页面或 iframe 中，因此同时在两个上下文中查找
-        """
+    def _handle_subsequent_pages(self, page: Page):
+        """Wait for department selection and final confirmation without fixed sleeps."""
         dept_text = self.approval_cfg.get("dept_select_text", "风险合规部")
-        final_confirm_selector = self.approval_cfg.get("final_confirm_button_selector", "")
+        final_selector = self.approval_cfg.get("final_confirm_button_selector", "")
         main_page = getattr(self, "main_page", None)
         contexts = []
         if main_page and main_page != page:
             contexts.append((main_page, "主页面"))
-        contexts.append((page, "iframe"))
-        self._log(f"[诊断] _handle_subsequent_pages 开始，contexts={[n for _, n in contexts]}")
-
-        # 1. 点击部门选择（如"风险合规部"）——仅当配置了部门文本时才执行
-        clicked = False
+        contexts.append((page, "审批页面"))
         if dept_text:
-            # 等待弹窗渲染
-            for ctx, name in contexts:
-                ctx.wait_for_timeout(1200)
-
-            selectors = [
-                f"div[title='{dept_text}']",
-                f"span[title='{dept_text}']",
-                f"a[title='{dept_text}']",
-                f"span:has-text('{dept_text}')",
-                f"div:has-text('{dept_text}')",
-                f"a:has-text('{dept_text}')",
-                f"button:has-text('{dept_text}')",
-                f"label:has-text('{dept_text}')",
-                f"input[value='{dept_text}']",
-                f"td:has-text('{dept_text}')",
-                f"li:has-text('{dept_text}')",
-            ]
-            for sel in selectors:
-                for ctx, name in contexts:
-                    try:
-                        locs = ctx.locator(sel).all()
-                        for idx, loc in enumerate(locs):
-                            try:
-                                if loc.is_visible():
-                                    loc.click()
-                                    self._log(f"  [操作] 点击'{dept_text}'（{name}，选择器: {sel}，第 {idx + 1} 个匹配）")
-                                    clicked = True
-                                    break
-                            except Exception:
-                                continue
-                        if clicked:
-                            break
-                    except Exception:
-                        continue
-                if clicked:
-                    break
-
-            if not clicked:
-                self._log(f"  [提示] 未找到'{dept_text}'选项，跳过部门选择步骤")
-
-            # 等待选择生效（弹窗动画可能较慢，给足时间）
-            for ctx, name in contexts:
-                ctx.wait_for_timeout(1500)
-        else:
-            self._log("  [提示] 未配置 dept_select_text，跳过部门选择步骤")
-
-        # 2. 最终操作：测试模式点取消，正常模式点最终确定
+            quoted = json.dumps(dept_text, ensure_ascii=False)
+            def department(ctx):
+                # Only search the context displaying the configured next-step window.
+                if final_selector and not ctx.locator(final_selector).filter(visible=True).count():
+                    return ctx.locator(":not(*)")
+                return ctx.get_by_text(dept_text, exact=True).or_(
+                    ctx.locator(f"[title={quoted}], input[value={quoted}]")
+                )
+            selected = self._wait_click(contexts, department, f"选择'{dept_text}'")
+            contexts = [(ctx, name) for ctx, name in contexts if ctx == selected]
         if self.test_mode:
-            # 测试模式：尝试点击取消按钮来回退
-            cancel_selectors = [
-                "button#buttonCancel",
-                "button[name=\"取消\"]",
-                "a:has-text(\"取消\")",
-                "button:has-text(\"取消\")",
-                "span:has-text(\"取消\")",
-                "div:has-text(\"取消\")",
-            ]
-            clicked_cancel = False
-            for sel in cancel_selectors:
-                for ctx, name in contexts:
-                    try:
-                        locs = ctx.locator(sel).all()
-                        for idx, loc in enumerate(locs):
-                            try:
-                                if loc.is_visible():
-                                    loc.click()
-                                    self._log(f"  [测试模式] 点击取消（{name}，选择器: {sel}，第 {idx + 1} 个匹配）")
-                                    clicked_cancel = True
-                                    break
-                            except Exception:
-                                continue
-                        if clicked_cancel:
-                            break
-                    except Exception:
-                        continue
-                if clicked_cancel:
-                    break
-            if not clicked_cancel:
-                self._log("  [测试模式] 未找到取消按钮，无法自动回退，请手动关闭弹窗")
-        elif final_confirm_selector:
-            clicked_final = False
-            for ctx, name in contexts:
-                # 2.1 先尝试标准可见点击
-                try:
-                    self.browser.safe_click(ctx, final_confirm_selector, timeout=5000)
-                    self._log(f"  [操作] 点击最终确定（{name}，选择器: {final_confirm_selector}）")
-                    clicked_final = True
-                    break
-                except Exception:
-                    pass
-
-                # 2.2 如果标准点击失败，尝试 force 点击（元素存在但 hidden 时）
-                try:
-                    loc = ctx.locator(final_confirm_selector)
-                    if loc.count() > 0:
-                        loc.first.click(force=True, timeout=3000)
-                        self._log(f"  [操作] 点击最终确定（{name}，force 模式）")
-                        clicked_final = True
-                        break
-                except Exception:
-                    pass
-
-                # 2.3 最后尝试 JS 直接点击
-                try:
-                    loc = ctx.locator(final_confirm_selector)
-                    if loc.count() > 0:
-                        loc.first.evaluate("el => el.click()")
-                        self._log(f"  [操作] 点击最终确定（{name}，JS 点击模式）")
-                        clicked_final = True
-                        break
-                except Exception as e:
-                    self._log(f"  [提示] 在{name}中点击最终确定失败: {e}")
-
-            if not clicked_final:
-                self._log("  [提示] 未找到最终确定按钮，流程可能已直接结束（无需部门选择）")
+            self._wait_click(
+                contexts,
+                lambda ctx: ctx.locator("button#buttonCancel").or_(
+                    ctx.get_by_role("button", name="取消", exact=True)
+                ).or_(ctx.get_by_role("link", name="取消", exact=True)),
+                "[测试模式] 点击取消",
+            )
+        elif final_selector:
+            self._wait_click(contexts, lambda ctx: ctx.locator(final_selector), "点击最终确定")
         else:
             self._log("  [提示] 未配置 final_confirm_button_selector，跳过最终确定步骤")
 

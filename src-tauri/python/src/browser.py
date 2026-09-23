@@ -95,18 +95,12 @@ class BrowserHelper:
         return candidates[-1]["page"]
 
     def safe_click(self, page: Page, selector: str, timeout: int = 5000):
-        """等待元素可见后点击。若元素不存在则立即抛出异常，避免超时阻塞。"""
-        if page.locator(selector).count() == 0:
-            raise Exception(f"Selector not found: {selector}")
-        page.wait_for_selector(selector, state="visible", timeout=timeout)
-        page.click(selector)
+        """等待目标出现、可见、稳定且可点击，共用同一个超时上限。"""
+        page.locator(selector).filter(visible=True).click(timeout=timeout)
 
     def safe_fill(self, page: Page, selector: str, text: str, timeout: int = 5000):
-        """等待元素可见后填写内容。若元素不存在则立即抛出异常，避免超时阻塞。"""
-        if page.locator(selector).count() == 0:
-            raise Exception(f"Selector not found: {selector}")
-        page.wait_for_selector(selector, state="visible", timeout=timeout)
-        page.fill(selector, text)
+        """等待输入框出现且可编辑，不因弹窗尚未渲染而立即失败。"""
+        page.locator(selector).filter(visible=True).fill(text, timeout=timeout)
 
     def extract_text(self, page: Page, selector: str, timeout: int = 3000) -> str:
         """提取元素的 inner_text，若不存在则返回空字符串。"""

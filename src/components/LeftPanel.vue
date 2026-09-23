@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useMagnetic } from '../composables/useMagnetic'
+import PushSettings from './PushSettings.vue'
 
 const props = defineProps<{
   isDark: boolean
@@ -24,18 +24,14 @@ const emit = defineEmits<{
 const qty = ref('1')
 const bizType = ref('金融不良资产')
 
-const sysDisabled = computed(() => !props.isConnected || props.isRunning)
+const settingsBusy = ref(true)
+const sysDisabled = computed(() => !props.isConnected || props.isRunning || settingsBusy.value)
 
 const handleSystem = (system: 'core' | 'oa') => {
   if (sysDisabled.value) return
   emit('start', { system, qty: qty.value, bizType: bizType.value })
 }
 
-const btnCoreRef = ref<HTMLElement | null>(null)
-const btnOaRef = ref<HTMLElement | null>(null)
-
-const coreOffset = useMagnetic(btnCoreRef, 6, 80)
-const oaOffset = useMagnetic(btnOaRef, 6, 80)
 </script>
 
 <template>
@@ -50,35 +46,35 @@ const oaOffset = useMagnetic(btnOaRef, 6, 80)
     <div class="steps">
       <div class="step" :class="{ completed: stepIndex > 0, active: stepIndex === 0 }">
         <div class="step-icon">{{ stepIndex > 0 ? '✓' : '1' }}</div>
-        <div class="step-label">conn</div>
+        <div class="step-label">连接</div>
       </div>
       <div class="step-line" :class="{ completed: stepIndex >= 1 }"></div>
       <div class="step" :class="{ completed: stepIndex > 1, active: stepIndex === 1 }">
         <div class="step-icon">{{ stepIndex > 1 ? '✓' : '2' }}</div>
-        <div class="step-label">pull</div>
+        <div class="step-label">提取</div>
       </div>
       <div class="step-line" :class="{ completed: stepIndex >= 2 }"></div>
       <div class="step" :class="{ completed: stepIndex > 2, active: stepIndex === 2 }">
         <div class="step-icon">{{ stepIndex > 2 ? '✓' : '3' }}</div>
-        <div class="step-label">submit</div>
+        <div class="step-label">登记</div>
       </div>
       <div class="step-line" :class="{ completed: stepIndex >= 3 }"></div>
       <div class="step" :class="{ completed: stepIndex > 3, active: stepIndex === 3 }">
         <div class="step-icon">{{ stepIndex > 3 ? '✓' : '4' }}</div>
-        <div class="step-label">done</div>
+        <div class="step-label">完成</div>
       </div>
     </div>
 
     <div class="status-card">
       <div class="status-header">
         <div class="status-dot" :class="{ pulse: isConnected }"></div>
-        <div class="status-label">chrome status</div>
+        <div class="status-label">浏览器连接</div>
       </div>
       <div class="status-title" :class="{ connected: isConnected }">
-        {{ isConnected ? 'connected' : 'disconnected' }}
+        {{ isConnected ? 'Chrome 已连接' : '等待连接 Chrome' }}
       </div>
       <div class="status-sub">
-        {{ isConnected ? '核心业务管理系统' : 'connect to begin' }}
+        {{ isConnected ? '选择下方系统开始处理' : '请先打开单位系统的审批页面' }}
       </div>
       <button
         class="status-connect-btn"
@@ -97,56 +93,55 @@ const oaOffset = useMagnetic(btnOaRef, 6, 80)
             class="qty-btn"
             :class="{ active: qty === n }"
             @click="qty = n"
-          >{{ { '1': 'I', '2': 'II', '3': 'III', '4': 'IV', '5': 'V' }[n] }}</button>
+          >{{ n }}</button>
           <span class="custom-label">其他:</span>
-          <input type="text" class="qty-input" placeholder="数量" v-model="qty" />
+          <input type="text" class="qty-input" aria-label="审批数量" placeholder="数量" v-model="qty" />
         </div>
       </div>
       <div class="param-section">
         <div class="param-label">业务类型</div>
-        <select class="biz-select" v-model="bizType">
+        <select class="biz-select" aria-label="业务类型" v-model="bizType">
           <option v-for="opt in bizTypeOptions" :key="opt">{{ opt }}</option>
         </select>
       </div>
     </div>
 
     <div class="action-card">
+      <div class="param-label">开始审批</div>
       <div class="btn-row">
         <button
-          ref="btnCoreRef"
           class="btn primary"
           :disabled="sysDisabled"
           @click="handleSystem('core')"
-          :style="{ transform: `translate(${coreOffset.x}px, ${coreOffset.y}px)` }"
         >核心业务系统</button>
         <button
-          ref="btnOaRef"
           class="btn primary"
           :disabled="sysDisabled"
           @click="handleSystem('oa')"
-          :style="{ transform: `translate(${oaOffset.x}px, ${oaOffset.y}px)` }"
         >OA 系统</button>
       </div>
     </div>
 
+    <PushSettings :is-running="isRunning" @busy="settingsBusy = $event" />
+
     <div class="view-toggle" v-show="hasExtractedData">
-      <div class="view-toggle-label">view</div>
+      <div class="view-toggle-label">预览</div>
       <div class="view-toggle-btns">
         <button
           class="btn"
           :class="{ 'active-state': view === 'data' }"
           @click="emit('switchView', 'data')"
-        >detail</button>
+        >查看数据</button>
         <button
           class="btn"
           :class="{ 'active-state': view === 'empty' }"
           @click="emit('switchView', 'empty')"
-        >empty</button>
+        >隐藏数据</button>
       </div>
     </div>
 
     <div class="countdown" :class="{ show: countdown > 0 }">
-      auto-hide in {{ countdown }}s...
+      {{ countdown }} 秒后自动隐藏预览
     </div>
 
     <div class="cancel-card">
@@ -166,8 +161,8 @@ const oaOffset = useMagnetic(btnOaRef, 6, 80)
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 24px;
-  gap: 16px;
+  padding: 20px;
+  gap: 12px;
   transition: background 0.3s ease, border-color 0.3s ease;
   flex-shrink: 0;
   overflow-y: auto;
@@ -380,15 +375,15 @@ const oaOffset = useMagnetic(btnOaRef, 6, 80)
   color: var(--text);
   font-size: 14px;
   font-weight: 400;
-  font-family: 'Times New Roman', 'Georgia', serif;
+  font-family: inherit;
   cursor: pointer;
   transition: all 0.2s;
 }
 .qty-btn:hover { border-color: var(--accent); color: var(--accent); }
 .qty-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-.custom-label { font-size: 12px; color: var(--text-secondary); margin-left: 4px; }
+.custom-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
 .qty-input {
-  width: 60px;
+  width: 48px;
   height: 32px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -445,7 +440,7 @@ const oaOffset = useMagnetic(btnOaRef, 6, 80)
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text);
-  font-family: 'Inter', sans-serif;
+  font-family: inherit;
   font-size: 13px;
   cursor: pointer;
   border-radius: 6px;

@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+push-settings.json
+push-settings.json.tmp
 
 # Rust / Tauri build artifacts
 src-tauri/target/
@@ -19,6 +21,7 @@ src-tauri/target/
 src-tauri/python/dist/
 src-tauri/python/build/
 *.spec
+!src-tauri/python/runner.spec
 __pycache__/
 *.pyc
 

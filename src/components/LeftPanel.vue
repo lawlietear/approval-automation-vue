@@ -1,34 +1,77 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import PushSettings from './PushSettings.vue'
+import BrowserConnection from './BrowserConnection.vue'
+import SoftwareUpdate from './SoftwareUpdate.vue'
+import WorkflowSettingsPanel from './WorkflowSettings.vue'
+import { defaultWorkflow, type WorkflowSettings, type DebugResult } from '../workflow'
 
 const props = defineProps<{
   isDark: boolean
   isConnected: boolean
+  isConnecting: boolean
   stepIndex: number
   hasExtractedData: boolean
   countdown: number
   isRunning: boolean
   view: 'empty' | 'loading' | 'data'
   bizTypeOptions: string[]
+  debugResult: DebugResult | null
 }>()
 
 const emit = defineEmits<{
   toggleTheme: []
-  connect: []
-  start: [payload: { system: 'core' | 'oa'; qty: string; bizType: string }]
+  connect: [endpoint: string]
+  browserBusy: [value: boolean]
+  start: [payload: { system: 'core' | 'oa'; qty: string; bizType: string; inspectOnly?: boolean }]
+  workflowChanged: [value: WorkflowSettings]
   cancel: []
   switchView: [view: 'empty' | 'data']
 }>()
 
 const qty = ref('1')
 const bizType = ref('金融不良资产')
+const activeSystem = ref<'core' | 'oa' | null>(null)
+watch(() => props.isRunning, running => { if (!running) activeSystem.value = null })
 
 const settingsBusy = ref(true)
-const sysDisabled = computed(() => !props.isConnected || props.isRunning || settingsBusy.value)
+const updateBusy = ref(false)
+const workflowBusy = ref(true)
+const workflow = ref(defaultWorkflow())
+const workflowMessage = ref('')
+const sysDisabled = computed(() => !props.isConnected || props.isConnecting || props.isRunning || (!workflow.value.debug_enabled && settingsBusy.value) || updateBusy.value || workflowBusy.value)
+function applyWorkflow(value: WorkflowSettings) { workflow.value = value; emit('workflowChanged', value) }
+async function changeDepartment(event: Event) {
+  const value = (event.target as HTMLSelectElement).value
+  workflowBusy.value = true
+  try {
+    const next = { ...workflow.value, department_id: value }
+    await invoke('save_workflow_settings', { settings: next })
+    applyWorkflow(next)
+    workflowMessage.value = ''
+  } catch (error) { workflowMessage.value = String(error); (event.target as HTMLSelectElement).value = workflow.value.department_id }
+  finally { workflowBusy.value = false }
+}
+function inspectDepartments() {
+  if (!props.isConnected || props.isRunning || props.isConnecting || updateBusy.value) return
+  emit('start', { system: 'core', qty: qty.value, bizType: bizType.value, inspectOnly: true })
+}
+const settingsDialog = ref<HTMLDialogElement>()
+const settingsTab = ref('registration')
+const summary = ref('正在读取登记状态…')
+const appInfo = ref({ version: '', settings_directory: '' })
+onMounted(async () => {
+  try { appInfo.value = await invoke('get_app_info') } catch { /* Settings panels display detailed load failures. */ }
+})
+function openSettings(tab = 'registration') {
+  settingsTab.value = tab
+  settingsDialog.value?.showModal()
+}
 
 const handleSystem = (system: 'core' | 'oa') => {
-  if (sysDisabled.value) return
+  if (sysDisabled.value || activeSystem.value || (workflow.value.debug_enabled && system === 'oa')) return
+  activeSystem.value = system
   emit('start', { system, qty: qty.value, bizType: bizType.value })
 }
 
@@ -37,10 +80,10 @@ const handleSystem = (system: 'core' | 'oa') => {
 <template>
   <div class="sidebar">
     <div class="logo">
-      <div>自动化审批 <span>v2.0.0</span></div>
-      <button class="theme-btn" @click="emit('toggleTheme')" title="切换主题">
+      <div>自动化审批 <span>工作台</span></div>
+      <div class="header-tools"><button class="settings-top" @click="openSettings()">设置</button><button class="theme-btn" @click="emit('toggleTheme')" title="切换主题">
         <span>{{ isDark ? '☼' : '☾' }}</span>
-      </button>
+      </button></div>
     </div>
 
     <div class="steps">
@@ -65,37 +108,13 @@ const handleSystem = (system: 'core' | 'oa') => {
       </div>
     </div>
 
-    <div class="status-card">
-      <div class="status-header">
-        <div class="status-dot" :class="{ pulse: isConnected }"></div>
-        <div class="status-label">浏览器连接</div>
-      </div>
-      <div class="status-title" :class="{ connected: isConnected }">
-        {{ isConnected ? 'Chrome 已连接' : '等待连接 Chrome' }}
-      </div>
-      <div class="status-sub">
-        {{ isConnected ? '选择下方系统开始处理' : '请先打开单位系统的审批页面' }}
-      </div>
-      <button
-        class="status-connect-btn"
-        :disabled="isRunning"
-        @click="emit('connect')"
-      >{{ isConnected ? '重新连接' : '连接 Chrome' }}</button>
-    </div>
+    <BrowserConnection :is-running="isRunning || updateBusy" @connected="emit('connect', $event)" @busy="emit('browserBusy', $event)" @settings="openSettings('browser')" />
 
     <div class="param-card">
-      <div class="param-section">
+      <div class="param-section quantity-section">
         <div class="param-label">数量</div>
         <div class="qty-row">
-          <button
-            v-for="n in ['1','2','3','4','5']"
-            :key="n"
-            class="qty-btn"
-            :class="{ active: qty === n }"
-            @click="qty = n"
-          >{{ n }}</button>
-          <span class="custom-label">其他:</span>
-          <input type="text" class="qty-input" aria-label="审批数量" placeholder="数量" v-model="qty" />
+          <select class="qty-input" aria-label="审批数量" v-model="qty"><option v-for="n in 10" :key="n" :value="String(n)">{{ n }}</option></select>
         </div>
       </div>
       <div class="param-section">
@@ -107,25 +126,49 @@ const handleSystem = (system: 'core' | 'oa') => {
     </div>
 
     <div class="action-card">
-      <div class="param-label">开始审批</div>
+      <div class="action-heading">{{ workflow.debug_enabled ? '安全调试 · 不审批不登记' : '审批并登记' }}<span>{{ isRunning ? '正在处理，请勿重复操作' : workflow.debug_enabled ? '仅提取信息及可点击性检查，不发送点击' : '核对当前浏览器页面，再选择对应系统' }}</span></div>
       <div class="btn-row">
         <button
           class="btn primary"
           :disabled="sysDisabled"
           @click="handleSystem('core')"
-        >核心业务系统</button>
+          :class="{ processing: isRunning && activeSystem === 'core' }"
+          :aria-busy="isRunning && activeSystem === 'core'"
+        ><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h6M9 11h6m-6 4h2m3 0h1M10 21v-3h4v3"/></svg><span>核心业务系统</span><span class="action-arrow" aria-hidden="true">↗</span></button>
         <button
           class="btn primary"
-          :disabled="sysDisabled"
+          :disabled="sysDisabled || workflow.debug_enabled"
           @click="handleSystem('oa')"
-        >OA 系统</button>
+          :class="{ processing: isRunning && activeSystem === 'oa' }"
+          :aria-busy="isRunning && activeSystem === 'oa'"
+        ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Zm0 0v6h6M8 14l3 3 5-5"/></svg><span>OA 系统</span><span class="action-arrow" aria-hidden="true">↗</span></button>
       </div>
+      <label v-if="workflow.show_department" class="home-department">部门选择
+        <select aria-label="首页部门选择" :value="workflow.department_id" :disabled="isRunning || workflowBusy || updateBusy" @change="changeDepartment">
+          <option value="">沿用原配置</option><option v-for="item in workflow.departments" :key="item.id" :value="item.id">{{ item.name }}</option>
+        </select>
+      </label>
+      <p v-if="workflowMessage" role="alert">{{ workflowMessage }}</p>
     </div>
 
-    <PushSettings :is-running="isRunning" @busy="settingsBusy = $event" />
+    <div class="registration-summary"><span>登记去向</span><p>{{ summary }}</p><p v-if="settingsBusy" class="pending">请先在设置中完成配置并保存</p></div>
+
+    <Teleport to="body">
+      <dialog ref="settingsDialog" class="settings-dialog" aria-labelledby="settings-title" @cancel="updateBusy && $event.preventDefault()">
+        <header><div><span class="eyebrow">仅在需要时调整</span><h2 id="settings-title">设置</h2></div><button class="btn" :disabled="updateBusy" @click="settingsDialog?.close()">返回工作台</button></header>
+        <nav aria-label="设置分类"><button v-for="[key, label] in [['registration', '数据登记'], ['browser', '浏览器'], ['workflow', '调试与部门'], ['update', '软件更新']]" :key="key" class="btn" :class="{ selected: settingsTab === key }" :aria-pressed="settingsTab === key" @click="settingsTab = key">{{ label }}</button></nav>
+        <div class="settings-content">
+          <div v-show="settingsTab === 'registration'"><PushSettings :is-running="isRunning || updateBusy" @busy="settingsBusy = $event" @summary="summary = $event" /></div>
+          <div v-show="settingsTab === 'browser'" id="browser-settings-pane"></div>
+          <div v-show="settingsTab === 'workflow'"><WorkflowSettingsPanel :is-running="isRunning || updateBusy" :can-inspect="isConnected && !isConnecting && !isRunning && !updateBusy" :saved="workflow" :result="debugResult" @busy="workflowBusy = $event" @changed="applyWorkflow" @inspect="inspectDepartments" /></div>
+          <div v-show="settingsTab === 'update'"><SoftwareUpdate :disabled="isRunning || isConnecting || settingsBusy" @busy="updateBusy = $event" /></div>
+        </div>
+        <footer><strong>配置仅保存在当前电脑，软件升级不会覆盖。</strong><span>v{{ appInfo.version }} · {{ appInfo.settings_directory }}</span></footer>
+      </dialog>
+    </Teleport>
 
     <div class="view-toggle" v-show="hasExtractedData">
-      <div class="view-toggle-label">预览</div>
+      <div class="view-toggle-label">预览<span v-if="countdown > 0">{{ countdown }} 秒后自动隐藏</span></div>
       <div class="view-toggle-btns">
         <button
           class="btn"
@@ -140,11 +183,7 @@ const handleSystem = (system: 'core' | 'oa') => {
       </div>
     </div>
 
-    <div class="countdown" :class="{ show: countdown > 0 }">
-      {{ countdown }} 秒后自动隐藏预览
-    </div>
-
-    <div class="cancel-card">
+    <div class="cancel-card" v-show="isRunning">
       <button
         class="btn cancel-btn"
         :disabled="!isRunning"
@@ -155,14 +194,34 @@ const handleSystem = (system: 'core' | 'oa') => {
 </template>
 
 <style scoped>
+.home-department { display:flex; gap:12px; align-items:center; font-size:12px; margin-top:8px; }
+.home-department select { min-width:0; flex:1; padding:7px; border:1px solid var(--border); border-radius:6px; color:var(--text); background:var(--bg); }
+.settings-dialog nav { flex-wrap:wrap; }
+.registration-summary { padding:4px 0; font-size:11px; color:var(--text-secondary); }
+.registration-summary p { margin-top:6px; line-height:1.6; }
+.pending { color:var(--accent); }
+.header-tools { display:flex; align-items:center; gap:6px; }
+.settings-top { font:inherit; font-size:12px; padding:7px 9px; border:1px solid var(--border); border-radius:6px; background:var(--panel); color:var(--accent); cursor:pointer; }
+.settings-dialog { margin:auto; padding:0; width:min(760px, calc(100vw - 32px)); max-height:calc(100vh - 32px); border:1px solid var(--border); border-radius:14px; background:var(--panel); color:var(--text); box-shadow:0 24px 80px #0005; }
+.settings-dialog[open] { display:flex; flex-direction:column; }
+.settings-dialog::backdrop { background:#15130f88; }
+.settings-dialog header { display:flex; align-items:center; justify-content:space-between; padding:22px 26px; border-bottom:1px solid var(--border); }
+.settings-dialog h2 { font-size:24px; margin-top:5px; }
+.eyebrow { font-size:11px; color:var(--accent); }
+.settings-dialog nav { display:flex; gap:8px; padding:16px 26px 0; }
+.settings-dialog nav .selected { color:var(--accent); border-color:var(--accent); background:var(--accent-glow); }
+.settings-content { padding:22px 26px; overflow:auto; min-height:240px; }
+.settings-dialog footer { padding:16px 26px; border-top:1px solid var(--border); font-size:11px; color:var(--text-secondary); line-height:1.6; overflow-wrap:anywhere; }
+.settings-dialog footer span { display:block; margin-top:5px; }
 .sidebar {
-  width: 320px;
+  width: 52%;
+  min-width: 340px;
   background: var(--panel);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 20px;
-  gap: 12px;
+  padding: 20px clamp(20px, 3vw, 42px);
+  gap: 10px;
   transition: background 0.3s ease, border-color 0.3s ease;
   flex-shrink: 0;
   overflow-y: auto;
@@ -207,18 +266,18 @@ const handleSystem = (system: 'core' | 'oa') => {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 14px;
+  padding: 8px 0;
   background: rgba(var(--card-rgb), 0.38);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(var(--text-rgb), 0.09);
+  border: 0;
   box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.04);
   border-radius: 8px;
   transition: background 0.3s ease, border-color 0.3s ease;
 }
 .step {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
@@ -351,10 +410,10 @@ const handleSystem = (system: 'core' | 'oa') => {
   border: 1px solid rgba(var(--text-rgb), 0.09);
   box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.04);
   border-radius: 8px;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 10px;
   transition: background 0.3s ease, border-color 0.3s ease;
 }
 .param-label {
@@ -383,7 +442,7 @@ const handleSystem = (system: 'core' | 'oa') => {
 .qty-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .custom-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
 .qty-input {
-  width: 48px;
+  width: 58px;
   height: 32px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -425,16 +484,20 @@ const handleSystem = (system: 'core' | 'oa') => {
   background: rgba(var(--card-rgb), 0.38);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(var(--text-rgb), 0.09);
+  border: 0;
   box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.04);
   border-radius: 8px;
-  padding: 14px;
+  padding: 8px 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
   transition: background 0.3s ease, border-color 0.3s ease;
 }
 .btn-row { display: flex; gap: 8px; }
+.action-heading { font-size:14px; font-weight:600; margin-bottom:6px; }
+.action-heading span { display:block; margin-top:5px; font-size:11px; font-weight:400; color:var(--text-secondary); }
+.action-card svg { width:18px; height:18px; flex-shrink:0; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+.action-arrow { display:none; }
 .btn {
   padding: 10px 16px;
   border: 1px solid var(--border);
@@ -468,7 +531,8 @@ const handleSystem = (system: 'core' | 'oa') => {
   opacity: 0.3;
   cursor: not-allowed;
 }
-.btn-row .btn { flex: 1; padding: 10px 8px; font-size: 12px; }
+.btn-row .btn { flex:1; display:flex; align-items:center; justify-content:center; gap:6px; min-height:44px; padding:10px 6px; font-size:12px; white-space:nowrap; border-radius:6px; }
+.btn-row .btn:disabled { opacity:.45; }
 
 /* Cancel */
 .cancel-card {
@@ -492,6 +556,8 @@ const handleSystem = (system: 'core' | 'oa') => {
 /* View toggle */
 .view-toggle { margin-top: 0; }
 .view-toggle-label {
+  display: flex;
+  justify-content: space-between;
   font-size: 11px;
   color: var(--text-secondary);
   margin-bottom: 6px;
@@ -505,18 +571,6 @@ const handleSystem = (system: 'core' | 'oa') => {
   color: var(--accent);
   background: var(--accent-glow);
 }
-
-/* Countdown */
-.countdown {
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-top: 0;
-  text-align: center;
-  opacity: 0;
-  transition: opacity 0.3s;
-  font-family: 'JetBrains Mono', monospace;
-}
-.countdown.show { opacity: 1; }
 
 @keyframes charge {
   from { transform: scaleX(0); }
@@ -536,4 +590,24 @@ const handleSystem = (system: 'core' | 'oa') => {
   0%, 100% { box-shadow: 0 0 0 3px var(--accent-glow); }
   50%      { box-shadow: 0 0 0 5px var(--accent-glow); }
 }
+.sidebar { background:radial-gradient(ellipse at top left,var(--accent-glow),transparent 65%),var(--panel); }
+.action-card { padding:16px; border:1px solid var(--border); border-radius:12px; background:var(--panel); box-shadow:0 8px 26px #00000005; }
+.btn-row { gap:10px; }
+.btn-row .btn { position:relative; overflow:hidden; isolation:isolate; min-height:46px; padding:10px 8px; font-size:13px; border-radius:8px; box-shadow:inset 0 1px 0 #ffffff35,0 3px 0 #00000015; transition:transform .18s ease,box-shadow .18s ease,background .18s ease; }
+.btn-row .btn::before { content:''; pointer-events:none; position:absolute; inset:0; background:linear-gradient(110deg,transparent 20%,#ffffff30 50%,transparent 80%); transform:translateX(-130%); }
+.btn-row .btn:hover:not(:disabled) { color:#fff; transform:translateY(-2px); box-shadow:inset 0 1px 0 #ffffff35,0 6px 18px var(--accent-glow); }
+.btn-row .btn:hover:not(:disabled)::before { animation:sweep .65s ease-out; }
+.btn-row .btn:active:not(:disabled) { transform:translateY(1px) scale(.98); box-shadow:inset 0 2px 5px #00000025; }
+.btn-row svg { transition:transform .2s ease; }
+.btn-row .btn:hover:not(:disabled) svg { transform:translateY(-1px) rotate(-5deg); }
+.btn-row .btn.processing { opacity:1; box-shadow:0 0 0 3px var(--accent-glow); cursor:progress; }
+.btn-row .btn.processing::before { animation:sweep 1.8s ease-in-out infinite; }
+.settings-top,.view-toggle .btn { transition:transform .18s ease,background .18s ease,border-color .18s ease; }
+.settings-top:hover { background:var(--accent-glow); border-color:var(--accent); }
+.settings-top:active,.theme-btn:active,.view-toggle .btn:active { transform:scale(.96); }
+.registration-summary { padding:10px 12px; border-left:2px solid var(--accent); background:var(--accent-glow); border-radius:0 8px 8px 0; }
+.qty-input:focus,.biz-select:focus { animation:none; }
+@keyframes sweep { to { transform:translateX(130%); } }
+@media (max-width:800px) { .sidebar { padding:20px; } .action-card { padding:12px; } .btn-row .btn { font-size:12px; } }
+@media (max-width:680px) { .sidebar { width:100%; min-width:0; flex-shrink:0; overflow:visible; border-right:0; border-bottom:1px solid var(--border); } }
 </style>

@@ -35,6 +35,9 @@ from src.browser import BrowserHelper
 from src.approver import ApprovalHelper
 from src.webhook import WebhookHelper
 from src.registration import Registration, load_settings, apply_wechat_settings
+from src.pending import PendingReader
+from src.core_commands import CoreCommands
+from src.safe_debug import load_workflow, inspect
 
 
 def emit(event_type, **kwargs):
@@ -49,6 +52,31 @@ def emit(event_type, **kwargs):
         pass
 
 
+def read_unlock_password():
+    """Read one UTF-8 password line from stdin without putting it in argv or logs."""
+    try:
+        raw = bytearray()
+        while len(raw) <= 1024:
+            part = os.read(0, 1)
+            if not part or part == b'\n':
+                break
+            raw.extend(part)
+    except OSError:
+        raise ValueError('无法从标准输入读取解锁密码') from None
+    try:
+        if raw.endswith(b'\r'):
+            raw.pop()
+        if not raw or len(raw) > 1024:
+            raise ValueError('解锁密码为空或过长')
+        try:
+            return raw.decode('utf-8')
+        except UnicodeDecodeError:
+            raise ValueError('解锁密码必须使用 UTF-8 输入') from None
+    finally:
+        for index in range(len(raw)):
+            raw[index] = 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Approval Automation Runner")
     parser.add_argument("--cdp", default="http://localhost:9222", help="Chrome DevTools Protocol endpoint")
@@ -56,16 +84,131 @@ def main():
     parser.add_argument("--qty", default="1", help="Override quantity")
     parser.add_argument("--biz-type", default="", help="Override business type")
     parser.add_argument("--oa-type", default="auto", choices=["auto", "old", "new"], help="OA system type")
-    parser.add_argument("--test-mode", action="store_true", help="Test mode: extract only, no click/submit")
+    parser.add_argument("--test-mode", action="store_true", help="Legacy test mode; core system may click approval dialogs. Not read-only.")
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument("--read-action", choices=["list", "view", "close"], help="Pending task tools; bypass approval and registration")
+    actions.add_argument("--approve-task", action="store_true", help="Approve one explicitly confirmed core task")
+    actions.add_argument("--approval-status", action="store_true", help="Read a durable approval result without browser actions")
+    actions.add_argument("--unlock-session", action="store_true", help="Unlock a verified core-system lock dialog using stdin")
+    actions.add_argument("--safe-debug", action="store_true", help="Read and trial-check only; never approve or register")
+    actions.add_argument("--inspect-departments", action="store_true", help="Read an already open department window")
+    parser.add_argument("--review-token", default="")
+    parser.add_argument("--confirm-task-id", default="")
+    parser.add_argument("--task-id", help="Exact pending task ID for view or close")
+    parser.add_argument("--page-url", help="Exact browser page URL when multiple pending homepages are open")
     args = parser.parse_args()
 
     # 加载配置
     if not os.path.exists(args.config):
         emit("error", msg=f"配置文件不存在: {args.config}")
-        return
+        return 1
 
-    with open(args.config, "r", encoding="utf-8") as f:
-        config = json.load(f)
+    try:
+        with open(args.config, "r", encoding="utf-8-sig") as f:
+            config = json.load(f)
+        if not isinstance(config, dict):
+            raise ValueError('配置必须为 JSON 对象')
+        if not isinstance(config.get('approval', {}), dict):
+            raise ValueError('approval 配置必须为 JSON 对象')
+    except (OSError, ValueError) as exc:
+        emit('error', msg=f'配置读取失败: {exc}')
+        return 1
+
+    try:
+        workflow = load_workflow(args.config)
+        if workflow['debug_enabled'] and (args.approve_task or args.test_mode):
+            raise ValueError('安全调试已开启，禁止命令审批和旧 test-mode；请先在设置关闭调试')
+        if workflow['department_id']:
+            config.setdefault('approval', {}).update(dept_select_id=workflow['department_id'], dept_select_source=workflow['source'])
+    except (OSError, ValueError, TypeError) as exc:
+        emit('error', msg=str(exc))
+        return 1
+
+    normal_action = not (args.read_action or args.approve_task or args.approval_status or args.unlock_session)
+    if args.safe_debug or args.inspect_departments or (workflow['debug_enabled'] and normal_action):
+        browser = BrowserHelper(cdp_endpoint=args.cdp, log_callback=lambda msg: emit('log', level='info', msg=msg))
+        try:
+            if args.oa_type != 'old' or args.test_mode:
+                raise ValueError('安全调试仅支持核心系统，不能使用旧 test-mode')
+            if not args.inspect_departments and not workflow['debug_steps']:
+                raise ValueError('请先在设置中确认审批步骤数')
+            browser.connect()
+            result = inspect(browser, config, workflow, lambda msg, level='info': emit('log', msg=msg, level=level), args.inspect_departments)
+            emit('debug_result', **result)
+            return 0
+        except Exception as exc:
+            emit('error', msg=str(exc))
+            return 1
+        finally:
+            browser.close()
+
+    if args.unlock_session:
+        from urllib.parse import urlsplit
+        browser = BrowserHelper(cdp_endpoint=args.cdp, log_callback=lambda msg: emit('log', level='info', msg=msg))
+        password = None
+        try:
+            endpoint = urlsplit(args.cdp)
+            if endpoint.scheme not in ('http', 'https', 'ws', 'wss') or endpoint.hostname not in ('localhost', '127.0.0.1', '::1'):
+                raise ValueError('解锁命令仅允许连接本机 Chrome 调试地址')
+            if args.oa_type != 'old' or args.test_mode:
+                raise ValueError('解锁命令仅支持核心系统')
+            password = read_unlock_password()
+            browser.connect()
+            reader = PendingReader(browser, config, lambda msg, level='info': emit('log', msg=msg, level=level), args.page_url)
+            emit('session_unlocked', **reader.unlock_session(password))
+            return 0
+        except Exception as exc:
+            emit('error', msg=str(exc))
+            return 1
+        finally:
+            password = None
+            browser.close()
+
+    if args.read_action or args.approve_task or args.approval_status:
+        from urllib.parse import urlsplit
+        browser = BrowserHelper(cdp_endpoint=args.cdp, log_callback=lambda msg: emit('log', level='info', msg=msg))
+        try:
+            endpoint = urlsplit(args.cdp)
+            if endpoint.scheme not in ('http', 'https', 'ws', 'wss') or endpoint.hostname not in ('localhost', '127.0.0.1', '::1'):
+                raise ValueError('本地工具仅允许连接本机 Chrome 调试地址')
+            if args.read_action != 'list' and not args.task_id:
+                raise ValueError('必须提供 --task-id；请先列出待办')
+            if (args.approve_task or args.approval_status) and (args.oa_type == 'new' or args.test_mode):
+                raise ValueError('命令审批仅支持核心系统，且不能使用旧 test-mode')
+            settings = load_settings(args.config, config)
+            apply_wechat_settings(args.config, config)
+            registration = Registration(settings, WebhookHelper(config), lambda msg, level='info': emit('log', msg=msg, level=level))
+            reader = PendingReader(browser, config, lambda msg, level='info': emit('log', msg=msg, level=level), args.page_url)
+            commands = CoreCommands(reader, registration, {'config': config, 'settings': settings})
+            with commands.lock():
+                if args.approval_status:
+                    result = commands.status(args.task_id, args.review_token)
+                    event = 'approval_status'
+                else:
+                    if args.approve_task and (not args.review_token or args.confirm_task_id != args.task_id):
+                        raise ValueError('审批必须提供查看凭证和匹配的 --confirm-task-id')
+                    browser.connect()
+                    if args.approve_task:
+                        result = commands.approve(args.task_id, args.review_token, args.confirm_task_id, args.qty, args.biz_type)
+                        event = 'approval_result'
+                    elif args.read_action == 'list':
+                        result = reader.list_tasks()
+                        event = 'pending_list'
+                    elif args.read_action == 'view':
+                        result = reader.view_task(args.task_id, 'new') if args.oa_type == 'new' else commands.review(args.task_id)
+                        event = 'project_view'
+                    else:
+                        result = reader.close_task(args.task_id)
+                        event = 'task_closed'
+            emit(event, **result)
+            if args.approve_task and (result.get('approval') != 'confirmed' or not result.get('registration_complete')):
+                return 2
+            return 0
+        except Exception as exc:
+            emit('error', msg=str(exc))
+            return 1
+        finally:
+            browser.close()
 
     # 覆盖字段
     config.setdefault("approval", {}).setdefault("fields", {})
@@ -236,7 +379,8 @@ def main():
                 success_count += 1
                 emit("submit_success", idx=idx, data=data)
             elif outcomes:
-                emit("log", level="error", msg=f"第 {idx + 1} 条数据提交失败")
+                failed = "、".join(name for name, ok in outcomes.items() if not ok)
+                emit("log", level="error", msg=f"第 {idx + 1} 条记录的{failed}登记未完成；已成功的通道不受影响，请勿为补登记重新执行审批")
             else:
                 emit("log", level="info", msg="所有登记通道已关闭，本条仅执行审批与提取")
 
@@ -253,4 +397,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

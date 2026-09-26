@@ -1,8 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ApprovalTool",
-  "version": "0.0.0",
+  "version": "2.1.0",
   "identifier": "com.yourcompany.approvaltool",
+  "plugins": {
+    "updater": { "pubkey": "" }
+  },
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -13,8 +16,8 @@
     "windows": [
       {
         "title": "自动化审批",
-        "width": 800,
-        "height": 750,
+        "width": 1000,
+        "height": 640,
         "minWidth": 700,
         "minHeight": 600,
         "center": true,

@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+const folderError = ref('')
+async function openFolder() {
+  try { await invoke('open_log_directory'); folderError.value = '' }
+  catch (e) { folderError.value = String(e) }
+}
 
 const props = defineProps<{
   logs: {time: string; type: 'ok' | 'error' | 'info'; msg: string}[]
@@ -22,11 +28,13 @@ const latestLog = computed(() => {
     <div class="log-header" @click="emit('toggle')">
       <div class="log-header-left">
         <div class="log-dot" :class="dotType"></div>
-        <span>logs</span>
+        <span>运行日志</span>
         <span class="log-latest">{{ latestLog }}</span>
       </div>
+      <button class="log-folder" @click.stop="openFolder">打开日志目录 · 保留5天</button>
       <div class="log-toggle">&#9662;</div>
     </div>
+    <p v-if="folderError" role="alert">{{ folderError }}</p>
     <div class="log-body">
       <div
         v-for="(log, i) in logs"
@@ -42,6 +50,7 @@ const latestLog = computed(() => {
 </template>
 
 <style scoped>
+.log-folder { flex-shrink:0; color:var(--text-secondary); background:transparent; border:1px solid var(--border); border-radius:4px; padding:4px 8px; cursor:pointer; font:inherit; font-size:11px; }
 .log-drawer {
   border-top: 1px solid rgba(var(--text-rgb), 0.09);
   background: rgba(var(--card-rgb), 0.38);
@@ -62,6 +71,7 @@ const latestLog = computed(() => {
 }
 .log-header {
   display: flex;
+  gap: 10px;
   align-items: center;
   justify-content: space-between;
   padding: 8px 24px;
@@ -72,6 +82,8 @@ const latestLog = computed(() => {
 .log-header:hover { background: var(--accent-glow); }
 .log-header-left {
   display: flex;
+  min-width: 0;
+  flex: 1;
   align-items: center;
   gap: 8px;
   font-size: 11px;
@@ -79,6 +91,7 @@ const latestLog = computed(() => {
   font-family: 'JetBrains Mono', monospace;
 }
 .log-dot {
+  flex-shrink: 0;
   width: 5px;
   height: 5px;
   border-radius: 50%;
@@ -87,6 +100,7 @@ const latestLog = computed(() => {
 .log-dot.active { background: var(--accent); }
 .log-dot.error { background: var(--error); }
 .log-latest {
+  min-width: 0;
   font-size: 11px;
   color: var(--text-tertiary);
   max-width: 400px;

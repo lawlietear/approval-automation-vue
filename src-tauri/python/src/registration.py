@@ -99,6 +99,10 @@ class Registration:
                 result = submit()
                 outcomes[channel] = bool(result)
                 detail = f": {result}" if channel == "Obsidian" and result else ""
+                if channel == "企业微信" and not result:
+                    reason = getattr(self.webhook, "last_error", "")
+                    if isinstance(reason, str) and reason:
+                        detail = f": {reason}"
                 self.log(f"{channel}登记{'成功' if result else '失败'}{detail}", "info" if result else "error")
             except Exception as exc:
                 outcomes[channel] = False

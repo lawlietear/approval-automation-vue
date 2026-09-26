@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import WechatSettings from './WechatSettings.vue'
 
 defineProps<{ isRunning: boolean }>()
-const emit = defineEmits<{ busy: [value: boolean] }>()
+const emit = defineEmits<{ busy: [value: boolean]; summary: [value: string] }>()
 const configPath = 'src-tauri/python/config.json'
 const settings = ref({ wechat_enabled: true, obsidian_enabled: false, obsidian_directory: '',
   wechat_url: '', wechat_schema: {} as Record<string, string>, wechat_timeout: 10 })
@@ -13,7 +13,11 @@ const busy = ref(false)
 const dirty = ref(false)
 const message = ref('正在读取登记设置…')
 const error = ref(false)
-const expanded = ref(false)
+const expanded = ref(true)
+
+function publishSummary() {
+  emit('summary', `企业微信 ${settings.value.wechat_enabled ? '已启用' : '未启用'} · Obsidian ${settings.value.obsidian_enabled ? '已启用' : '未启用'}`)
+}
 
 function changed() {
   dirty.value = true
@@ -27,6 +31,7 @@ onMounted(async () => {
   try {
     settings.value = await invoke('get_push_settings', { configPath })
     loaded.value = true
+    publishSummary()
     message.value = ''
     emit('busy', false)
   } catch (e) {
@@ -59,6 +64,7 @@ async function save() {
   try {
     await invoke('save_push_settings', { configPath, settings: settings.value })
     dirty.value = false
+    publishSummary()
     error.value = false
     message.value = '已保存，下次审批生效'
   } catch (e) {

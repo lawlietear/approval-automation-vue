@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { parseWechatSchema, wechatFields as fields } from '../wechatSchema'
 
 interface WechatConfig {
   wechat_enabled: boolean
@@ -16,14 +17,6 @@ const dialog = ref<HTMLDialogElement>()
 const showUrl = ref(false)
 const example = ref('')
 const importMessage = ref('')
-const fields = [
-  ['title', '项目名称', '事项名称'], ['time', '时间', '登记时间'],
-  ['dept', '部门', '部门'], ['biz_type', '业务类型', '业务类型'],
-  ['work_type', '工作类型', '工作类型'], ['qty', '数量', '数量'],
-  ['remark', '备注', '备注'], ['counterparty', '交易对手', '交易对手'],
-  ['contract_amount', '合同金额', '合同金额'], ['contract_name', '合同名称', '合同名称'],
-  ['contract_no', '合同编号', '合同编号'],
-] as const
 
 watch(() => props.dirty, (dirty, previous) => {
   if (previous && !dirty && !props.error) dialog.value?.close()
@@ -31,28 +24,14 @@ watch(() => props.dirty, (dirty, previous) => {
 
 function importFields() {
   try {
-    const value = JSON.parse(example.value)
-    const schema = value.webhook?.schema ?? value.schema ?? value
-    if (!schema || Array.isArray(schema) || typeof schema !== 'object') throw new Error()
-    const result: Record<string, string> = {}
-    for (const [key, label, source] of fields) {
-      if (typeof schema[key] === 'string' && schema[key].trim()) {
-        result[key] = schema[key].trim()
-      } else {
-        const match = Object.entries(schema).find(([, name]) => name === label || name === source)
-        if (match) result[key] = match[0]
-      }
-    }
-    if (!Object.keys(result).length) {
-      importMessage.value = '未识别到对应字段。请检查示例中的字段名称，或在下方手动填写。'
-      return
-    }
+    const { mapping: result, missing } = parseWechatSchema(example.value)
     settings.value = { ...settings.value, wechat_schema: result }
     emit('change')
     example.value = ''
-    importMessage.value = `已填入 ${Object.keys(result).length} 个字段，请核对后保存。未识别的字段留空。`
-  } catch {
-    importMessage.value = '示例格式无法识别，请粘贴完整的 JSON 请求示例（包含 schema）。'
+    importMessage.value = `已填入 ${Object.keys(result).length} 个字段，请核对后保存。` +
+      (missing.length ? `未匹配并留空：${missing.join('、')}。` : '全部登记字段已匹配。')
+  } catch (e) {
+    importMessage.value = e instanceof Error ? e.message : '识别失败，原字段未修改。'
   }
 }
 </script>
@@ -83,8 +62,8 @@ function importFields() {
             <p class="hint">不同表格的字段标识不同。项目名称必填；不需要登记的字段留空。左侧为审批信息，右侧填目标表格字段标识。</p>
             <details class="import-box">
               <summary>从 Webhook 请求示例自动填入（推荐）</summary>
-              <p class="hint">粘贴含 schema 的 JSON 示例，程序会按字段名称匹配。也兼容旧配置的 webhook.schema；不会修改链接。</p>
-              <textarea v-model="example" aria-label="Webhook 请求示例" rows="4" spellcheck="false" placeholder='例如：{"schema":{"字段标识":"项目名称"}}'></textarea>
+              <p class="hint">可直接粘贴智能表格的完整请求示例（含 title、type、enum），或单独的 schema。兼容旧配置；只读取列名和标识，不发送示例记录、不修改链接。导入成功会替换原字段映射。</p>
+              <textarea v-model="example" aria-label="Webhook 请求示例" rows="4" spellcheck="false" placeholder='例如：{"schema":{"字段标识":{"title":"项目名称","type":"text"}}}'></textarea>
               <button type="button" @click="importFields">识别并填入字段</button>
               <p role="status" class="hint">{{ importMessage }}</p>
             </details>

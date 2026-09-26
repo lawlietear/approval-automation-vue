@@ -1,5 +1,7 @@
 import json
+import re
 import time
+from urllib.parse import parse_qsl, urlsplit
 import requests
 
 
@@ -12,19 +14,29 @@ class WebhookHelper:
             "Content-Type": "application/json"
         })
         self.timeout = self.webhook_cfg.get("timeout", 10)
+        self.last_error = ""
+
+    def _fail(self, message):
+        # Server messages can echo the secret webhook URL or its query credentials.
+        message = str(message).replace(self.url, "[Webhook链接]") if self.url else str(message)
+        for _, value in parse_qsl(urlsplit(self.url).query):
+            if value:
+                message = message.replace(value, "[已隐藏]")
+        message = re.sub(r"https?://[^\s<>\"']+", "[链接已隐藏]", message)
+        self.last_error = " ".join(message.split())[:500]
+        return False
 
     def submit(self, data: dict) -> bool:
         """
         通过 HTTP POST 将数据发送到企业微信文档 webhook。
         数据格式遵循 schema + add_records 结构。
         """
+        self.last_error = ""
         if not self.url:
-            print("[错误] 未配置 webhook.url")
-            return False
+            return self._fail("未配置 Webhook 链接，请在设置中填写")
 
         if not self.schema:
-            print("[错误] 未配置 webhook.schema")
-            return False
+            return self._fail("未配置表格字段映射，请在设置中导入 schema")
 
         record = {}
 
@@ -101,30 +113,33 @@ class WebhookHelper:
         }
 
         # 清理 schema 中可能为 None 的键
-        payload["schema"] = {k: v for k, v in payload["schema"].items() if k is not None}
+        payload["schema"] = {k: v for k, v in payload["schema"].items() if k}
 
         try:
-            print(f"\n[Webhook] 正在发送数据到企业微信文档...")
             response = requests.post(
                 self.url,
                 headers=self.headers,
                 data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                 timeout=self.timeout
             )
-            if response.status_code < 400:
-                print(f"  [完成] Webhook 发送成功，状态码: {response.status_code}")
-                try:
-                    resp_json = response.json()
-                    if resp_json.get("errcode", 0) != 0:
-                        print(f"  [警告] 企业微信返回业务错误: {resp_json.get('errmsg', '')}")
-                        return False
-                except Exception:
-                    pass
-                return True
-            else:
-                print(f"  [错误] Webhook 返回异常状态码: {response.status_code}")
-                print(f"  响应内容: {response.text[:200]}")
-                return False
-        except Exception as e:
-            print(f"  [错误] Webhook 发送失败: {e}")
-            return False
+            status = response.status_code
+            try:
+                result = response.json()
+            except ValueError:
+                return self._fail(f"HTTP {status}，返回内容不是 JSON，无法确认登记；请检查链接或网络拦截，不要直接重跑审批")
+            if not isinstance(result, dict):
+                return self._fail(f"HTTP {status}，接口响应格式异常，无法确认登记")
+            code = result.get("errcode")
+            if not 200 <= status < 300 or code not in (0, "0"):
+                return self._fail(f"HTTP {status}，errcode={code if code is not None else '缺失'}，errmsg={result.get('errmsg', '未提供错误说明')}；请核对 Webhook 链接及目标表格字段映射")
+            return True
+        except requests.exceptions.ProxyError:
+            return self._fail("代理连接失败，请检查单位电脑代理设置及代理程序是否运行")
+        except requests.exceptions.SSLError:
+            return self._fail("HTTPS 证书验证失败，请检查单位网络证书或联系网络管理员")
+        except requests.exceptions.Timeout:
+            return self._fail("请求超时，无法确认服务器是否已登记；请先检查表格，不要直接重跑审批")
+        except requests.exceptions.ConnectionError:
+            return self._fail("网络连接中断或无法连接企业微信；请检查网络，并先确认表格是否已收到记录")
+        except Exception as exc:
+            return self._fail(f"请求异常（{type(exc).__name__}），无法确认登记；请检查链接和设置")

@@ -13,6 +13,9 @@ dist-ssr
 *.local
 push-settings.json
 push-settings.json.tmp
+*.key
+*.key.pub
+release-output/
 
 # Rust / Tauri build artifacts
 src-tauri/target/

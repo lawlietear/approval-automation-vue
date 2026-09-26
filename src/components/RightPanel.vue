@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 interface FieldDef {
   label: string
   key: string
@@ -7,8 +8,8 @@ interface FieldDef {
 }
 
 const FIELDS: FieldDef[] = [
-  { label: 'dept', key: '部门', barClass: 'c-dept' },
   { label: 'item', key: '事项名称', barClass: 'c-item' },
+  { label: 'dept', key: '部门', barClass: 'c-dept' },
   { label: 'work', key: '工作类型', barClass: 'c-work' },
   { label: 'biz', key: '业务类型', barClass: 'c-biz' },
   { label: 'party', key: '交易对手', barClass: 'c-party' },
@@ -24,13 +25,16 @@ const props = defineProps<{
   dataMap: Record<string, string>
   pageSub: string
 }>()
+const fields = computed(() => [...FIELDS, ...Object.keys(props.dataMap)
+  .filter(key => !FIELDS.some(field => field.key === key))
+  .map(key => ({ key, label: key, barClass: 'c-note', highlight: key === '金额' }))])
 </script>
 
 <template>
   <div class="main">
-    <div class="main-content">
+    <div class="main-content" tabindex="0" aria-label="审批详情，可滚动查看全部字段">
       <div class="page-header">
-        <div class="page-title">审批预览</div>
+        <div class="page-title">审批预览<span class="detail-tag">信息单</span></div>
         <div class="page-sub">{{ pageSub }}</div>
       </div>
 
@@ -42,7 +46,7 @@ const props = defineProps<{
             <path d="M10 12h4"/>
           </svg>
         </div>
-        <div class="empty-title">准备好，开始下一条审批</div>
+        <div class="empty-title">下一条审批，从左侧开始</div>
         <div class="empty-sub">连接 Chrome，选择系统。提取的数据将在这里显示。</div>
         <div class="empty-guide"><span>01 / 连接浏览器</span><span>02 / 核对登记设置</span><span>03 / 开始审批</span></div>
       </div>
@@ -59,13 +63,13 @@ const props = defineProps<{
       <div v-else class="card">
         <div class="data-list">
           <div
-            v-for="f in FIELDS"
+            v-for="f in fields"
             :key="f.key"
             class="data-row"
           >
             <div class="data-label" :class="f.barClass">{{ f.key }}</div>
             <div class="data-value" :class="{ highlight: f.highlight }" :title="dataMap[f.key] || ''">
-              {{ dataMap[f.key] || '-' }}
+              {{ dataMap[f.key] ?? '未提取' }}<span v-if="dataMap[f.key] === ''">未提取</span>
             </div>
           </div>
         </div>
@@ -84,11 +88,11 @@ const props = defineProps<{
 }
 .main-content {
   flex: 1;
-  padding: 28px 32px;
+  padding: 22px;
   overflow-y: auto;
 }
 .page-header {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--border);
   transition: border-color 0.3s ease;
@@ -110,21 +114,21 @@ const props = defineProps<{
   border: 1px solid rgba(var(--text-rgb), 0.09);
   box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.04);
   border-radius: 8px;
-  padding: 24px;
+  padding: 4px 16px;
   transition: background 0.3s ease, border-color 0.3s ease;
 }
 .data-list { display: flex; flex-direction: column; gap: 0; }
 .data-row {
   display: flex;
   align-items: baseline;
-  padding: 12px 0;
+  padding: 10px 0;
   border-bottom: 1px solid var(--divider);
-  gap: 14px;
+  gap: 12px;
   transition: border-color 0.3s ease;
 }
 .data-row:last-child { border-bottom: none; }
 .data-label {
-  width: 90px;
+  width: 68px;
   font-size: 11px;
   color: var(--text-secondary);
   font-weight: 500;
@@ -150,9 +154,10 @@ const props = defineProps<{
   font-weight: 400;
   transition: color 0.3s ease;
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+  user-select: text;
 }
 .data-value.highlight {
   font-family: 'JetBrains Mono', monospace;
@@ -179,16 +184,15 @@ const props = defineProps<{
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 100px 40px;
+  padding: 42px 8px;
   text-align: center;
 }
 .empty-state.show { display: flex; }
 .empty-icon {
-  width: 64px;
-  height: 64px;
+  width: 44px;
+  height: 44px;
   margin-bottom: 20px;
   color: var(--text-secondary);
-  animation: float-y 4s ease-in-out infinite;
 }
 .empty-title {
   font-family: 'JetBrains Mono', monospace;
@@ -201,7 +205,7 @@ const props = defineProps<{
 .empty-sub {
   animation: fade-up 0.6s ease-out 0.15s both;
 }
-.empty-guide { display: grid; gap: 12px; margin-top: 32px; padding: 20px 24px; border: 1px solid var(--border); border-radius: 10px; text-align: left; color: var(--text-secondary); font-size: 12px; }
+.empty-guide { display: grid; gap: 8px; margin-top: 24px; padding: 14px 20px; border: 1px solid var(--border); border-radius: 10px; text-align: left; color: var(--text-secondary); font-size: 12px; }
 @keyframes float-y {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-8px); }
@@ -258,4 +262,11 @@ const props = defineProps<{
 .data-row:nth-child(8) { animation-delay: 385ms; }
 .data-row:nth-child(9) { animation-delay: 440ms; }
 .data-row:nth-child(10) { animation-delay: 495ms; }
+.page-title { display:flex; align-items:center; justify-content:space-between; }
+.detail-tag { font-size:10px; font-weight:400; color:var(--accent); border:1px solid var(--border); padding:2px 9px; border-radius:20px; }
+.page-sub { overflow-wrap:anywhere; line-height:1.7; }
+.data-row:has(.c-item) { display:block; padding:14px 0; }
+.data-row:has(.c-item) .data-label { margin-bottom:6px; }
+.data-row:has(.c-item) .data-value { font-size:16px; font-weight:600; }
+@media (max-width:680px) { .main { flex:none; overflow:visible; } .main-content { overflow:visible; } }
 </style>

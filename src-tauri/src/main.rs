@@ -1,7 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::{AppHandle, Emitter, Manager, State, path::BaseDirectory};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+mod chrome;
+mod settings;
+mod updater;
+mod logs;
 use tokio::process::Child;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
@@ -10,6 +14,7 @@ use tokio::sync::mpsc::Sender;
 struct ApprovalState {
     child: Mutex<Option<Child>>,
     cancel_tx: Mutex<Option<Sender<String>>>,
+    browser_launch: Mutex<()>,
 }
 
 /// 在工作目录及可执行文件周边探测 runner 路径
@@ -72,6 +77,12 @@ fn find_runner_py(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 
 /// 探测 config.json 路径：优先使用传入路径，再回退到 runner.py 同级目录
 fn find_config_json(app: &AppHandle, preferred: &str) -> Result<std::path::PathBuf, String> {
+    let directory = settings::directory(app)?;
+    let legacy = if directory.exists() { directory.join("config.json") } else { find_legacy_config(app, preferred)? };
+    settings::initialize(&directory, &legacy)
+}
+
+fn find_legacy_config(app: &AppHandle, preferred: &str) -> Result<std::path::PathBuf, String> {
     #[cfg(debug_assertions)]
     for candidate in [preferred, "python/config.json", "src-tauri/python/config.json"] {
         let path = std::path::PathBuf::from(candidate);
@@ -128,50 +139,68 @@ fn find_config_json(app: &AppHandle, preferred: &str) -> Result<std::path::PathB
     ))
 }
 
-// ── 验证 Chrome CDP 连接 ──
 #[tauri::command]
-async fn connect_chrome(cdp_endpoint: String) -> Result<String, String> {
-    let url = cdp_endpoint.trim_end_matches('/');
-    let host_port = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .unwrap_or(url);
-
-    let mut stream = tokio::net::TcpStream::connect(host_port)
-        .await
-        .map_err(|e| format!("无法连接 Chrome CDP 端口: {}", e))?;
-
-    let request = format!(
-        "GET /json/list HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        host_port
-    );
-    stream
-        .write_all(request.as_bytes())
-        .await
-        .map_err(|e| format!("发送请求失败: {}", e))?;
-
-    let mut buf = [0u8; 1024];
-    let n = stream
-        .read(&mut buf)
-        .await
-        .map_err(|e| format!("读取响应失败: {}", e))?;
-
-    if n == 0 {
-        return Err("Chrome 未返回任何数据".into());
+async fn detect_chrome(mode: String, port: u16, profile: String) -> Result<chrome::Detection, String> {
+    if mode == "smart" {
+        // Prefer the established debugging port; only try discovery when absent.
+        if let Some(endpoint) = chrome::probe(port).await? {
+            return Ok(chrome::Detection { endpoint, message: format!("已发现 Chrome（端口 {port}）") });
+        }
+        return chrome::detect("auto", port, &profile).await.map_err(|_| format!("未找到可用 Chrome。已检查 localhost:{port} 和新版调试入口；请先用原快捷方式打开 Chrome，或启动专用浏览器"));
     }
+    chrome::detect(&mode, port, &profile).await
+}
 
-    let response = String::from_utf8_lossy(&buf[..n]);
-    if response.contains("200 OK") {
-        Ok("connected".into())
-    } else {
-        Err(format!(
-            "Chrome 返回异常: {}",
-            response.lines().next().unwrap_or("unknown")
-        ))
+#[tauri::command]
+fn get_browser_settings(app: AppHandle, legacy: Option<settings::BrowserSettings>) -> Result<settings::BrowserSettings, String> {
+    find_config_json(&app, "src-tauri/python/config.json")?;
+    settings::browser(&settings::directory(&app)?, legacy)
+}
+
+#[tauri::command]
+async fn save_browser_settings(app: AppHandle, settings: settings::BrowserSettings, state: State<'_, ApprovalState>) -> Result<(), String> {
+    let mut guard = state.child.lock().await;
+    if let Some(child) = guard.as_mut() {
+        if child.try_wait().map_err(|e| e.to_string())?.is_none() { return Err("审批运行期间不能修改设置".into()); }
     }
+    settings::save_browser(&settings::directory(&app)?, &settings)
+}
+
+#[tauri::command]
+fn get_app_info(app: AppHandle) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({ "version": app.package_info().version.to_string(), "settings_directory": settings::directory(&app)?.display().to_string() }))
+}
+
+#[tauri::command]
+async fn connect_chrome(cdp_endpoint: String) -> Result<(), String> {
+    chrome::connect(&cdp_endpoint).await
+}
+
+#[tauri::command]
+async fn launch_chrome(app: AppHandle, port: u16, executable: String, state: State<'_, ApprovalState>) -> Result<String, String> {
+    let _guard = state.browser_launch.lock().await;
+    let name = if port == 9222 { "ChromeProfile".to_string() } else { format!("ChromeProfile-{port}") };
+    let profile = app.path().app_local_data_dir().map_err(|e| e.to_string())?.join(name);
+    chrome::launch(profile, port, &executable).await
 }
 
 // ── 启动审批流程 ──
+#[tauri::command]
+fn get_workflow_settings(app: AppHandle) -> Result<settings::WorkflowSettings, String> {
+    find_config_json(&app, "src-tauri/python/config.json")?;
+    settings::workflow(&settings::directory(&app)?)
+}
+
+#[tauri::command]
+async fn save_workflow_settings(app: AppHandle, settings: settings::WorkflowSettings, state: State<'_, ApprovalState>) -> Result<(), String> {
+    let mut guard = state.child.lock().await;
+    if let Some(child) = guard.as_mut() {
+        if child.try_wait().map_err(|e| e.to_string())?.is_none() { return Err("运行期间不能修改调试与部门设置".into()); }
+    }
+    find_config_json(&app, "src-tauri/python/config.json")?;
+    settings::save_workflow(&settings::directory(&app)?, &settings)
+}
+
 #[tauri::command]
 async fn start_approval(
     app: AppHandle,
@@ -181,11 +210,14 @@ async fn start_approval(
     biz_type: String,
     oa_type: String,
     test_mode: bool,
+    inspect_only: Option<bool>,
+    safe_debug: Option<bool>,
     state: State<'_, ApprovalState>,
 ) -> Result<(), String> {
     // 若上次进程已结束，自动清理；若仍在运行则拒绝重复启动
+    let mut child_guard = state.child.lock().await;
     {
-        let mut guard = state.child.lock().await;
+        let guard = &mut *child_guard;
         if let Some(ref mut child) = *guard {
             match child.try_wait() {
                 Ok(None) => return Err("已有正在运行的审批流程".into()),
@@ -198,6 +230,13 @@ async fn start_approval(
 
     let runner_path = find_runner_py(&app)?;
     let config_path = find_config_json(&app, &config_path)?;
+    let workflow = settings::workflow(&settings::directory(&app)?)?;
+    let inspect_only = inspect_only.unwrap_or(false);
+    let safe_debug = workflow.debug_enabled || safe_debug.unwrap_or(false);
+    if (safe_debug || inspect_only) && (oa_type != "old" || test_mode) {
+        return Err("安全调试仅支持核心系统，不能运行 OA 或旧测试模式".into());
+    }
+    logs::record(&app, "runner/start", &format!("oa_type={oa_type}, test_mode={test_mode}, qty={qty}"));
 
     let is_exe = runner_path
         .extension()
@@ -224,20 +263,25 @@ async fn start_approval(
     if !biz_type.is_empty() {
         cmd.arg("--biz-type").arg(&biz_type);
     }
-    if test_mode {
+    if inspect_only {
+        cmd.arg("--inspect-departments");
+    } else if safe_debug {
+        cmd.arg("--safe-debug");
+    } else if test_mode {
         cmd.arg("--test-mode");
     }
 
     cmd.env("PYTHONUNBUFFERED", "1")
         .stdout(std::process::Stdio::piped())
         .stdin(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit());
+        .stderr(std::process::Stdio::piped());
 
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("启动 Python 失败: {}", e))?;
 
     let stdout = child.stdout.take().ok_or("无法获取 Python stdout")?;
+    let stderr = child.stderr.take().ok_or("无法获取 Python stderr")?;
     let stdin = child.stdin.take().ok_or("无法获取 Python stdin")?;
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel::<String>(1);
@@ -246,10 +290,15 @@ async fn start_approval(
         let mut tx_guard = state.cancel_tx.lock().await;
         *tx_guard = Some(cancel_tx);
     }
-    {
-        let mut child_guard = state.child.lock().await;
-        *child_guard = Some(child);
-    }
+    *child_guard = Some(child);
+
+    let app_stderr = app.clone();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            logs::record(&app_stderr, "runner/stderr", &line);
+        }
+    });
 
     // stdout 读取 + 事件转发
     let app_stdout = app.clone();
@@ -260,12 +309,17 @@ async fn start_approval(
         while let Ok(Some(line)) = lines.next_line().await {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
                 if let Some(event_type) = value.get("event").and_then(|v| v.as_str()) {
+                    // Do not duplicate entire extracted records in diagnostic files.
+                    if !matches!(event_type, "data_extracted" | "submit_success" | "debug_result") {
+                        logs::record(&app_stdout, "runner/event", &line);
+                    }
                     let event_name = format!("approval:{}", event_type);
                     let _ = app_stdout.emit(&event_name, value);
                 }
-            }
+            } else { logs::record(&app_stdout, "runner/stdout", &line); }
         }
 
+        logs::record(&app_stdout, "runner/finished", "执行组件输出结束");
         let _ = app_stdout.emit("approval:finished", serde_json::json!({}));
     });
 
@@ -439,18 +493,37 @@ async fn cancel_approval(state: State<'_, ApprovalState>) -> Result<(), String> 
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updater::UpdateState::default())
+        .setup(|app| {
+            logs::record(app.handle(), "app/start", &format!("version={}", app.package_info().version));
+            Ok(())
+        })
         .manage(ApprovalState {
             child: Mutex::new(None),
             cancel_tx: Mutex::new(None),
+            browser_launch: Mutex::new(()),
         })
         .invoke_handler(tauri::generate_handler![
             connect_chrome,
+            detect_chrome,
+            launch_chrome,
             start_approval,
             cancel_approval,
             get_config,
             get_push_settings,
             save_push_settings,
             select_obsidian_directory,
+            get_browser_settings,
+            save_browser_settings,
+            get_workflow_settings,
+            save_workflow_settings,
+            get_app_info,
+            logs::append_ui_log,
+            logs::open_log_directory,
+            updater::update_info,
+            updater::check_update,
+            updater::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

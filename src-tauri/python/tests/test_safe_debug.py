@@ -61,6 +61,16 @@ class SafeDebugTests(unittest.TestCase):
         self.assertEqual(result['clicks_sent'], 0)
         self.assertEqual(self.page.evaluate('window.clicks'), 0)
 
+    def test_closed_department_window_uses_live_reader_without_opening(self):
+        self.page.locator('#selectPartjobOrgWin').evaluate("el=>el.style.display='none'")
+        live = {'items': [{'id': 'fresh', 'name': '实时部门'}], 'complete': True, 'pages': '1'}
+        with patch('src.safe_debug.read_departments', return_value=live) as reader:
+            result = inspect(self.browser, self.config, self.workflow, Mock(), options_only=True)
+        reader.assert_called_once()
+        self.assertEqual(result['departments'], live)
+        self.assertFalse(self.page.locator('#selectPartjobOrgWin').is_visible())
+        self.assertEqual(self.page.evaluate('window.clicks'), 0)
+
     def test_parent_dialog_and_child_detail_are_one_workflow(self):
         self.page.locator('#wf_btn_2').evaluate('el=>el.remove()')
         self.page.locator('#title').evaluate('el=>el.remove()')
@@ -80,7 +90,8 @@ class SafeDebugTests(unittest.TestCase):
 
     def test_options_only_does_not_require_valid_approval_selector(self):
         self.config['approval']['approve_button_selector'] = '['
-        result = inspect(self.browser, self.config, self.workflow, Mock(), options_only=True)
+        with patch('src.safe_debug.read_departments', return_value={'complete': True}):
+            result = inspect(self.browser, self.config, self.workflow, Mock(), options_only=True)
         self.assertTrue(result['departments']['complete'])
         self.assertEqual(result['records'], [])
 
@@ -97,7 +108,8 @@ class SafeDebugTests(unittest.TestCase):
         self.workflow['department_id'] = 'missing'
         with self.assertRaisesRegex(ValueError, '不匹配'):
             inspect(self.browser, self.config, self.workflow, Mock())
-        self.assertTrue(inspect(self.browser, self.config, self.workflow, Mock(), options_only=True)['departments']['complete'])
+        with patch('src.safe_debug.read_departments', return_value={'complete': True}):
+            self.assertTrue(inspect(self.browser, self.config, self.workflow, Mock(), options_only=True)['departments']['complete'])
         self.assertEqual(self.page.evaluate('window.clicks'), 0)
 
     def test_multiple_pages_rejected_without_clicks(self):
@@ -158,6 +170,15 @@ class SafeDebugTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'department failed'):
             helper.process_current_page(self.page)
         helper._process_detail.assert_called_once()
+
+    def test_failed_initial_click_raises_after_persisting_extracted_snapshot(self):
+        saved = Mock()
+        helper = ApprovalHelper(self.browser, self.config, log_callback=Mock(), oa_type='old', before_approval=saved)
+        with patch.object(self.browser, 'safe_click', side_effect=RuntimeError('fixture failure')):
+            with self.assertRaisesRegex(RuntimeError, '停止登记'):
+                helper._process_detail(self.page)
+        self.assertEqual(saved.call_args.args[0][0]['事项名称'], 'fixture')
+        self.assertEqual(self.page.evaluate('window.clicks'), 0)
 
     def test_runner_debug_bypasses_all_registration_and_approval_objects(self):
         old_stdout = sys.stdout

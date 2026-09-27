@@ -1,5 +1,11 @@
 # 本地待办工具
 
+2.2.0 新增处理记录、独立补登和只读诊断命令，见 ACTIVITY_HANDOVER.md。core status 会合并最新补登状态；补登不会重新审批。旧历史不自动迁移为新处理记录。
+
+2.2.1 的 `ApprovalRunner.exe --config <本机配置路径> --cdp <本机调试地址> --oa-type old --inspect-departments` 改为实时查询当前会话部门，无需打开原网页部门窗口，不点击或登记。使用条件和单位验收见SAFE_DEBUG_HANDOVER.md。
+
+2.3.0新增schema导入变更预览、按列名选择、类型校验及单选值对应关系，见WECHAT_SCHEMA_HANDOVER.md。补登沿用当前已保存的列信息和对应关系；值校验失败不会发送企业微信请求。
+
 2026-09-26：本机 Settings/workflow.json 的安全调试开启时，命令 approve 与旧 --test-mode 被拒绝；list/view/status 仍是独立只读入口。正式核心审批复用设置中的部门ID并在当前窗口重验。调试使用说明及当前构建哈希见 SAFE_DEBUG_HANDOVER.md。
 
 供在单位电脑上运行的 Codex 或 PowerShell 使用，无需 MCP，不增加前端按钮。先在 Chrome 登录核心系统并打开有“流程待办”的首页。沿用已有调试模式；默认连接 localhost:9222，其他调试地址使用 -Cdp 指定。本工具不启动浏览器，不绕过登录或单位网络权限。

@@ -6,13 +6,14 @@ import json
 
 
 class ApprovalHelper:
-    def __init__(self, browser: BrowserHelper, config: dict, test_mode: bool = False, log_callback=None, oa_type: str = "auto"):
+    def __init__(self, browser: BrowserHelper, config: dict, test_mode: bool = False, log_callback=None, oa_type: str = "auto", before_approval=None):
         self.browser = browser
         self.config = config
         self.approval_cfg = config.get("approval", {})
         self.test_mode = test_mode
         self.log_callback = log_callback
         self.oa_type = oa_type  # "auto" | "old" | "new"
+        self.before_approval = before_approval
 
     def _log(self, msg, level="info"):
         if self.log_callback:
@@ -235,6 +236,9 @@ class ApprovalHelper:
             if extracted != expected_records:
                 raise RuntimeError('点击前字段发生变化，停止审批并要求重新核实')
 
+        if self.before_approval and not self.test_mode:
+            self.before_approval([dict(data, 合同名称=name) for name in doc_names] if doc_names else [data])
+
         # Legacy test mode is not read-only; use extract_current_page for reading.
         if self.test_mode:
             self._log("  [测试模式] 已启用：将执行点击以验证流程，最后一步会点取消")
@@ -246,7 +250,7 @@ class ApprovalHelper:
             if action_guard:
                 raise RuntimeError('未配置同意按钮，停止审批')
             self._log("[错误] 未配置 approve_button_selector", "error")
-            return [data]
+            raise RuntimeError('未配置同意按钮，未执行审批，停止登记')
 
         try:
             cnt = page.locator(approve_selector).count()
@@ -261,7 +265,7 @@ class ApprovalHelper:
             if action_guard:
                 raise RuntimeError('同意点击结果未确认，禁止自动重试') from e
             self._log(f"[错误] 点击同意失败: {e}", "error")
-            return [data]
+            raise RuntimeError('同意点击结果未确认，停止登记；请人工核实') from e
 
         # 处理确认/评论框
         comment_selector = self.approval_cfg.get("comment_input_selector", "")
@@ -690,6 +694,8 @@ class ApprovalHelper:
             return [data]
 
         # 5. 点击按钮（日照资产：同意；OA系统通用页面：提交）
+        if self.before_approval:
+            self.before_approval([data])
         try:
             if is_rizhao_page:
                 self.browser.safe_click(page, "input#operation_btn_14_a", timeout=5000)
@@ -700,7 +706,7 @@ class ApprovalHelper:
         except Exception as e:
             btn_name = "同意" if is_rizhao_page else "提交"
             self._log(f"[错误] 点击{btn_name}失败: {e}", "error")
-            return [data]
+            raise RuntimeError('OA点击结果未确认，停止登记；请人工核实') from e
 
         self._log("  [完成] OA系统审批项处理完毕")
         return [data]

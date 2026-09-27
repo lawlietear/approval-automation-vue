@@ -17,8 +17,9 @@ def fingerprint(value):
 
 
 class CoreCommands:
-    def __init__(self, reader, registration, configuration, directory=None):
+    def __init__(self, reader, registration, configuration, directory=None, activity=None):
         self.reader, self.registration = reader, registration
+        self.activity = activity
         self.configuration = fingerprint(configuration)
         self.directory = Path(directory) if directory else Path(os.environ['LOCALAPPDATA']) / 'com.yourcompany.approvaltool' / 'LocalCommands'
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -87,7 +88,16 @@ class CoreCommands:
         review = self.get_review(task_id, token)
         with self.connect() as db:
             row = db.execute('SELECT result FROM attempts WHERE origin=? AND task=?', (review[2], task_id)).fetchone()
-        return json.loads(row[0]) if row else {'task_id': task_id, 'approval': 'not_started', 'registration': []}
+        result = json.loads(row[0]) if row else {'task_id': task_id, 'approval': 'not_started', 'registration': []}
+        if self.activity and result.get('activity_id'):
+            activity = self.activity.get(result['activity_id'])
+            result['channel_states'] = [record['channels'] for record in activity['records']]
+            if result['approval'] == 'confirmed':
+                result['registration'] = [{'index': index, 'channels': {
+                    channel: state['state'] == 'success' for channel, state in record['channels'].items()
+                    if state['state'] != 'disabled'}} for index, record in enumerate(activity['records'])]
+                result['registration_complete'] = all(all(row['channels'].values()) for row in result['registration'])
+        return result
 
     def save(self, origin, task_id, result, create=False):
         with self.connect() as db:
@@ -169,7 +179,13 @@ class CoreCommands:
         result = {'task_id': task_id, 'approval': 'unknown', 'registration': [], 'records': records,
                   'note': '审批尝试已开始；若进程中断，禁止重试，请人工核实。'}
         self.save(review[2], task_id, result, create=True)
+        activity_item = None
         try:
+            if self.activity:
+                activity_item = self.activity.begin('old', cfg.get('dept_select_id', ''), task_id)
+                self.activity.add_records(activity_item, records, self.registration)
+                result['activity_id'] = activity_item['id']
+                self.save(review[2], task_id, result)
             helper = ApprovalHelper(self.reader.browser, self.reader.config, log_callback=self.reader.log, oa_type='old')
             helper.main_page = frame
             helper.dialog_page = self.reader.portal_page
@@ -180,8 +196,13 @@ class CoreCommands:
             result.update(approval='confirmed', evidence='fresh_complete_pending_list_absent',
                           note='最终确认点击完成且刷新后的完整待办无此任务；不是后台审批回执。')
             self.save(review[2], task_id, result)
+            if activity_item:
+                activity_item.update(approval='confirmed', note=result['note'])
+                self.activity.save(activity_item)
             for index, record in enumerate(records):
-                result['registration'].append({'index': index, 'channels': self.registration.submit(record)})
+                channels = (self.activity.submit_record(activity_item, index, self.registration)
+                            if activity_item else self.registration.submit(record))
+                result['registration'].append({'index': index, 'channels': channels})
                 self.save(review[2], task_id, result)
             result['registration_complete'] = len(result['registration']) == len(records) and all(
                 all(item['channels'].values()) for item in result['registration'])

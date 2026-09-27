@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseWechatSchema } from '../src/wechatSchema.ts'
+import { parseWechatSchema, analyzeWechatSchema, fieldTypeError } from '../src/wechatSchema.ts'
 
 const schema = {
   f736Lk: { title: '时间', type: 'date_time' },
@@ -27,6 +27,7 @@ test('raw schema, legacy config and simple mapping remain supported', () => {
   assert.deepEqual(parseWechatSchema(JSON.stringify(schema)).mapping, expected)
   assert.deepEqual(parseWechatSchema(JSON.stringify({webhook: {schema: expected}})).mapping, expected)
   assert.equal(parseWechatSchema('{"schema":{"a":"事项名称","b":"日期"}}').mapping.time, 'b')
+  assert.equal(analyzeWechatSchema(JSON.stringify({webhook:{schema:expected}})).columns.fMAzZf.title, '金额')
 })
 test('Markdown wrappers and escaped underscores from copied requests', () => {
   const pasted = '```json\n' + JSON.stringify({schema}).replaceAll('_', '\\_') + '\n``` &#x20;'
@@ -45,4 +46,34 @@ test('malformed and unrelated input has actionable errors', () => {
   for (const input of ['null', '[]', '{"schema":null}', '{"schema":{"x":{"type":"text"}}}', 'bad json']) {
     assert.throws(() => parseWechatSchema(input), /原字段未修改/)
   }
+})
+
+test('visual analysis retains types/options and lets the user resolve duplicate names', () => {
+  const result = analyzeWechatSchema(JSON.stringify({schema:{...schema, other: {title:'事项名称', type:'text'}}}))
+  assert.deepEqual(result.ambiguous, ['项目名称'])
+  assert.equal(result.mapping.title, undefined)
+  assert.equal(result.columns.other.title, '事项名称')
+  assert.deepEqual(result.columns.fVgYr2.enum, ['股权投资部', '风险合规部'])
+  assert.equal(result.columns.f736Lk.type, 'date_time')
+})
+
+test('unmatched titles remain available for manual column selection', () => {
+  const result = analyzeWechatSchema('{"schema":{"a":{"title":"自定义事项列","type":"text"}}}')
+  assert.deepEqual(result.mapping, {})
+  assert.equal(result.columns.a.title, '自定义事项列')
+})
+
+test('unsupported types are reported, missing types preserve legacy behavior', () => {
+  assert.match(fieldTypeError('title', {title:'标题',type:'number'}), /不兼容|支持/)
+  assert.match(fieldTypeError('dept', {title:'部门',type:'multi_select'}), /multi_select/)
+  assert.equal(fieldTypeError('contract_amount', {title:'金额',type:'number'}), '')
+  assert.equal(fieldTypeError('dept', {title:'部门',type:''}), '')
+})
+
+test('invalid options and normalized duplicate IDs cannot destroy old settings', () => {
+  for (const fields of [
+    {a:{title:'部门',type:'single_select',enum:['A','A']}},
+    {a:{title:'部门',type:'single_select',enum:[{text:'A'}]}},
+    {a:{title:'事项名称'}, ' a ':{title:'备注'}},
+  ]) assert.throws(() => analyzeWechatSchema(JSON.stringify({schema:fields})), /原字段未修改/)
 })

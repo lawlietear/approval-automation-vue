@@ -16,6 +16,8 @@ push-settings.json.tmp
 *.key
 *.key.pub
 release-output/
+activity.sqlite3*
+activity.lock
 
 # Rust / Tauri build artifacts
 src-tauri/target/

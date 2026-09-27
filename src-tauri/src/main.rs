@@ -337,6 +337,66 @@ async fn start_approval(
 
 // ── 读取配置 ──
 #[tauri::command]
+async fn activity_command(
+    app: AppHandle, action: String, item_id: Option<String>, record_index: Option<u32>,
+    channel: Option<String>, revision: Option<String>, offset: Option<u32>, endpoint: Option<String>,
+    state: State<'_, ApprovalState>,
+) -> Result<serde_json::Value, String> {
+    if !matches!(action.as_str(), "list" | "retry" | "received" | "absent" | "diagnose") {
+        return Err("不支持的处理动作".into());
+    }
+    let mut guard = state.child.try_lock().map_err(|_| "已有任务正在运行，请稍后重试")?;
+    if let Some(child) = guard.as_mut() {
+        if child.try_wait().map_err(|e| e.to_string())?.is_none() {
+            return Err("审批运行期间不能补登或诊断".into());
+        }
+    }
+    let directory = settings::directory(&app)?;
+    // Diagnostics/history remain accessible even when an existing config is damaged.
+    let config = if directory.exists() { directory.join("config.json") }
+                 else { find_config_json(&app, "src-tauri/python/config.json")? };
+    let runner = find_runner_py(&app)?;
+    let mut command = if runner.extension().and_then(|e| e.to_str()) == Some("exe") {
+        tokio::process::Command::new(&runner)
+    } else {
+        let mut command = tokio::process::Command::new("python");
+        command.arg(&runner);
+        command
+    };
+    command.arg("--config").arg(config).arg("--activity-action").arg(&action)
+        .arg("--activity-id").arg(item_id.unwrap_or_default())
+        .arg("--record-index").arg(record_index.unwrap_or(0).to_string())
+        .arg("--channel").arg(channel.unwrap_or_default())
+        .arg("--revision").arg(revision.unwrap_or_default())
+        .arg("--offset").arg(offset.unwrap_or(0).to_string());
+    if action == "diagnose" {
+        let mut endpoint = endpoint.unwrap_or_default();
+        if endpoint.is_empty() {
+            let prefs = settings::browser(&directory, None).unwrap_or_default();
+            endpoint = detect_chrome(prefs.mode, prefs.port, prefs.profile).await
+                .map(|found| found.endpoint).unwrap_or_else(|_| format!("http://localhost:{}", prefs.port));
+        }
+        command.arg("--cdp").arg(endpoint);
+    }
+    command.kill_on_drop(true).stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(180), command.output()).await
+        .map_err(|_| "操作超时；若正在补登，请刷新记录并核实目标，勿直接重试")?
+        .map_err(|e| format!("执行组件无法启动：{e}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines().rev() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim_start_matches('\u{feff}')) {
+            if value["event"] == "error" {
+                return Err(value["msg"].as_str().unwrap_or("操作失败").to_string());
+            }
+            if value["event"] == "activity_result" && output.status.success() { return Ok(value); }
+        }
+    }
+    Err("执行组件未返回完整结果；请刷新记录，补登结果不确定时先人工核实".into())
+}
+
+#[tauri::command]
 async fn get_config(
     app: AppHandle,
     config_path: String,
@@ -352,6 +412,15 @@ async fn get_config(
 
 // ── 取消审批流程 ──
 #[derive(serde::Serialize, serde::Deserialize)]
+struct WechatColumn {
+    title: String,
+    #[serde(default, rename = "type")]
+    kind: String,
+    #[serde(default, rename = "enum", skip_serializing_if = "Option::is_none")]
+    choices: Option<Vec<String>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 struct PushSettings {
     wechat_enabled: bool,
     obsidian_enabled: bool,
@@ -362,6 +431,90 @@ struct PushSettings {
     wechat_schema: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default)]
     wechat_timeout: Option<u32>,
+    #[serde(default)]
+    wechat_columns: std::collections::BTreeMap<String, WechatColumn>,
+    #[serde(default)]
+    wechat_value_mappings: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+}
+
+fn validate_wechat_columns(settings: &PushSettings) -> Result<(), String> {
+    for (id, col) in &settings.wechat_columns {
+        if id.trim().is_empty() || col.title.trim().is_empty() { return Err("表格列标识或名称为空".into()); }
+        if let Some(choices) = &col.choices {
+            let unique: std::collections::BTreeSet<_> = choices.iter().collect();
+            if unique.len() != choices.len() || choices.iter().any(|v| v.trim().is_empty()) {
+                return Err("表格下拉选项重复或为空".into());
+            }
+        }
+    }
+    if let Some(schema) = &settings.wechat_schema {
+        for (key, id) in schema {
+            let col = settings.wechat_columns.get(id);
+            if !settings.wechat_columns.is_empty() && col.is_none() { return Err(format!("{}对应的列不在已导入表格中", key)); }
+            if let Some(col) = col {
+                let allowed: &[&str] = match key.as_str() {
+                    "title" => &["text"], "time" => &["date_time"],
+                    "qty" | "contract_amount" => &["text", "number"],
+                    _ => &["text", "single_select"],
+                };
+                if !col.kind.is_empty() && !allowed.contains(&col.kind.as_str()) {
+                    return Err(format!("列“{}”的类型不兼容，请重新选择", col.title));
+                }
+            }
+        }
+    }
+    for (key, rules) in &settings.wechat_value_mappings {
+        if rules.is_empty() { continue; }
+        let col = settings.wechat_schema.as_ref().and_then(|s| s.get(key)).and_then(|id| settings.wechat_columns.get(id));
+        let choices = col.filter(|c| c.kind == "single_select").and_then(|c| c.choices.as_ref())
+            .ok_or("选项对应关系需要绑定到包含选项的单选列")?;
+        if rules.iter().any(|(source, target)| source.trim().is_empty() || !choices.contains(target)) {
+            return Err("选项对应关系包含空原值或不存在的目标选项".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod wechat_settings_tests {
+    use super::*;
+    fn settings() -> PushSettings {
+        serde_json::from_value(serde_json::json!({
+            "wechat_enabled": true, "obsidian_enabled": false, "obsidian_directory": "",
+            "wechat_schema": {"title":"t", "dept":"d"},
+            "wechat_columns": {"t":{"title":"项目名称","type":"text"},"d":{"title":"部门","type":"single_select","enum":["合规部"]}},
+            "wechat_value_mappings": {"dept":{"风控部":"合规部"}}
+        })).unwrap()
+    }
+    #[test]
+    fn metadata_round_trip_preserves_types_options_and_rules() {
+        let original = settings();
+        assert!(validate_wechat_columns(&original).is_ok());
+        let value = serde_json::to_value(&original).unwrap();
+        assert!(value["wechat_columns"]["t"].get("enum").is_none());
+        let restored: PushSettings = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.wechat_value_mappings["dept"]["风控部"], "合规部");
+        assert!(validate_wechat_columns(&restored).is_ok());
+    }
+    #[test]
+    fn legacy_settings_need_no_new_keys() {
+        let legacy: PushSettings = serde_json::from_value(serde_json::json!({
+            "wechat_enabled":true,"obsidian_enabled":false,"obsidian_directory":"","wechat_schema":{"title":"old"}
+        })).unwrap();
+        assert!(validate_wechat_columns(&legacy).is_ok());
+    }
+    #[test]
+    fn incompatible_type_unknown_column_and_stale_rule_rejected() {
+        let mut value = settings();
+        value.wechat_columns.get_mut("t").unwrap().kind = "number".into();
+        assert!(validate_wechat_columns(&value).is_err());
+        let mut value = settings();
+        value.wechat_columns.remove("t");
+        assert!(validate_wechat_columns(&value).is_err());
+        let mut value = settings();
+        value.wechat_columns.get_mut("d").unwrap().choices = Some(vec!["其他部".into()]);
+        assert!(validate_wechat_columns(&value).is_err());
+    }
 }
 
 #[tauri::command]
@@ -381,6 +534,8 @@ async fn get_push_settings(app: AppHandle, config_path: String) -> Result<PushSe
             wechat_url: None,
             wechat_schema: None,
             wechat_timeout: None,
+            wechat_columns: Default::default(),
+            wechat_value_mappings: Default::default(),
         }
     };
     settings.wechat_url.get_or_insert_with(|| config["webhook"]["url"].as_str().unwrap_or("").to_string());
@@ -418,6 +573,7 @@ async fn save_push_settings(
         return Err("请求超时时间须为 1 至 120 秒".into());
     }
     if settings.wechat_enabled {
+        validate_wechat_columns(&settings)?;
         let url = settings.wechat_url.as_deref().unwrap_or("");
         let parsed = tauri::Url::parse(url).map_err(|_| "请填写有效的企业微信智能表格 Webhook 链接")?;
         if parsed.scheme() != "https" || parsed.host_str() != Some("qyapi.weixin.qq.com")
@@ -509,6 +665,7 @@ fn main() {
             detect_chrome,
             launch_chrome,
             start_approval,
+            activity_command,
             cancel_approval,
             get_config,
             get_push_settings,

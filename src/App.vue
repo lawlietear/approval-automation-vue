@@ -28,6 +28,8 @@ const pageSub = ref('从左侧连接浏览器，开始审批')
 const isRunning = ref(false)
 const workflow = ref(defaultWorkflow())
 const debugResult = ref<DebugResult | null>(null)
+const debugError = ref('')
+let activeDebug = false
 
 // Data
 const dataMap = ref<Record<string, string>>({})
@@ -91,6 +93,8 @@ const handleConnect = (endpoint: string) => {
 const handleStart = async (payload: { system: 'core' | 'oa'; qty: string; bizType: string; inspectOnly?: boolean }) => {
   if (!isConnected.value || isRunning.value) return
   clearTimers()
+  activeDebug = workflow.value.debug_enabled || !!payload.inspectOnly
+  if (activeDebug) { debugResult.value = null; debugError.value = '' }
   isRunning.value = true
   stepIndex.value = 1
   view.value = 'loading'
@@ -109,6 +113,8 @@ const handleStart = async (payload: { system: 'core' | 'oa'; qty: string; bizTyp
       safeDebug: workflow.value.debug_enabled,
     })
   } catch (e: any) {
+    if (activeDebug) debugError.value = `本次检查未能启动：${e}`
+    activeDebug = false
     addLog(`start failed: ${e}`, 'error')
     isRunning.value = false
     stepIndex.value = isConnected.value ? 0 : -1
@@ -119,6 +125,7 @@ const handleStart = async (payload: { system: 'core' | 'oa'; qty: string; bizTyp
 
 const handleCancel = async () => {
   clearTimers()
+  if (activeDebug) debugError.value = '本次检查已取消，未取得新的部门选项。'
   try {
     await invoke('cancel_approval')
   } catch (e: any) {
@@ -167,6 +174,7 @@ onMounted(async () => {
   }))
 
   unlisteners.push(await listen('approval:debug_result', (e: any) => {
+    debugError.value = ''
     debugResult.value = e.payload
     if (e.payload.records?.length) {
       dataMap.value = e.payload.records[0]
@@ -200,6 +208,7 @@ onMounted(async () => {
   }))
 
   unlisteners.push(await listen('approval:error', (e: any) => {
+    if (activeDebug) debugError.value = String(e.payload.msg || '本次检查失败，请查看日志')
     addLog(e.payload.msg, 'error', false)
     isRunning.value = false
     if (view.value === 'loading') view.value = hasExtractedData.value ? 'data' : 'empty'
@@ -208,6 +217,12 @@ onMounted(async () => {
   }))
 
   unlisteners.push(await listen('approval:finished', () => {
+    if (activeDebug && !debugResult.value && !debugError.value) {
+      debugError.value = '执行组件已结束，但未返回检查结果。请查看日志；没有读取到新的部门选项。'
+      view.value = hasExtractedData.value ? 'data' : 'empty'
+      pageSub.value = debugError.value
+    }
+    activeDebug = false
     isRunning.value = false
   }))
 
@@ -243,10 +258,12 @@ onUnmounted(() => {
         :has-extracted-data="hasExtractedData"
         :countdown="countdown"
         :is-running="isRunning"
+        :endpoint="connectedEndpoint"
         :is-connecting="isConnecting"
         :view="view"
         :biz-type-options="bizTypeOptions"
         :debug-result="debugResult"
+        :debug-error="debugError"
         @workflow-changed="workflow = $event"
         @toggle-theme="toggleTheme"
         @connect="handleConnect"

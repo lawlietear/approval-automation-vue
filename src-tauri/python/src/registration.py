@@ -24,7 +24,8 @@ def apply_wechat_settings(config_path, config):
         return
     settings = json.loads(path.read_text(encoding="utf-8"))
     webhook = config.setdefault("webhook", {})
-    for setting, key in (("wechat_url", "url"), ("wechat_schema", "schema"), ("wechat_timeout", "timeout")):
+    for setting, key in (("wechat_url", "url"), ("wechat_schema", "schema"), ("wechat_timeout", "timeout"),
+                         ("wechat_columns", "columns"), ("wechat_value_mappings", "value_mappings")):
         if settings.get(setting) is not None:
             webhook[key] = settings[setting]
 
@@ -38,6 +39,8 @@ class Registration:
     def validate(self):
         if self.settings["wechat_enabled"] and (not self.webhook.url or not self.webhook.schema):
             raise ValueError("企业微信推送已启用，但 Webhook 地址或字段映射未配置")
+        if self.settings["wechat_enabled"]:
+            self.webhook.validate_schema()
         if self.settings["obsidian_enabled"]:
             directory = Path(self.settings["obsidian_directory"])
             if not directory.is_absolute() or not directory.is_dir():
@@ -46,8 +49,8 @@ class Registration:
             with tempfile.TemporaryFile(dir=directory):
                 pass
 
-    def write_note(self, data):
-        now = datetime.now().astimezone()
+    def write_note(self, data, recorded_at=None):
+        now = datetime.fromisoformat(recorded_at) if recorded_at else datetime.now().astimezone()
         title = str(data.get("事项名称") or "未命名审批")
         directory = Path(self.settings["obsidian_directory"])
         date_name = f"{now.year}-{now.month}-{now.day}"
@@ -85,6 +88,28 @@ class Registration:
         with note:
             note.write(content)
         return path
+
+    def send_channel(self, data, channel, recorded_at=None):
+        """One channel only, with an explicit uncertainty state for recovery."""
+        key = {'Obsidian': 'obsidian_enabled', '企业微信': 'wechat_enabled'}.get(channel)
+        if not key or not self.settings.get(key):
+            return dict(state='failed', detail='通道未启用，请先在设置中启用原通道')
+        if channel == 'Obsidian':
+            directory = Path(self.settings.get('obsidian_directory', ''))
+            if not directory.is_absolute() or not directory.is_dir():
+                return dict(state='failed', detail='Obsidian目录不可用，请连接磁盘并核对设置')
+            try:
+                path = self.write_note(data, recorded_at)
+                return dict(state='success', detail=str(path))
+            except Exception:
+                # A partial file may already exist, especially on a disconnected share.
+                return dict(state='unknown', detail='本地写入异常，可能已创建文件；请先核实文件内容，勿直接重写')
+        try:
+            ok = self.webhook.submit(data, recorded_at=recorded_at)
+            return dict(state='success' if ok else self.webhook.last_state,
+                        detail='' if ok else self.webhook.last_error)
+        except Exception:
+            return dict(state='unknown', detail='登记请求异常，无法确认结果；请先核实目标表格')
 
     def submit(self, data):
         outcomes = {}

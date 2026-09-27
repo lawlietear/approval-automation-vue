@@ -38,6 +38,8 @@ from src.registration import Registration, load_settings, apply_wechat_settings
 from src.pending import PendingReader
 from src.core_commands import CoreCommands
 from src.safe_debug import load_workflow, inspect
+from src.activity import Activity
+from src.diagnostics import diagnose
 
 
 def emit(event_type, **kwargs):
@@ -91,12 +93,35 @@ def main():
     actions.add_argument("--approval-status", action="store_true", help="Read a durable approval result without browser actions")
     actions.add_argument("--unlock-session", action="store_true", help="Unlock a verified core-system lock dialog using stdin")
     actions.add_argument("--safe-debug", action="store_true", help="Read and trial-check only; never approve or register")
-    actions.add_argument("--inspect-departments", action="store_true", help="Read an already open department window")
+    actions.add_argument("--inspect-departments", action="store_true", help="Query current-session departments without approval callbacks")
+    actions.add_argument('--activity-action', choices=['list', 'retry', 'received', 'absent', 'diagnose'])
+    parser.add_argument('--activity-id', default='')
+    parser.add_argument('--record-index', type=int, default=0)
+    parser.add_argument('--channel', default='')
+    parser.add_argument('--revision', default='')
+    parser.add_argument('--offset', type=int, default=0)
     parser.add_argument("--review-token", default="")
     parser.add_argument("--confirm-task-id", default="")
     parser.add_argument("--task-id", help="Exact pending task ID for view or close")
     parser.add_argument("--page-url", help="Exact browser page URL when multiple pending homepages are open")
     args = parser.parse_args()
+
+    try:
+        journal = Activity(args.config)
+        with journal.lock():
+            return run(args, journal)
+    except Exception as exc:
+        emit('error', msg=str(exc))
+        return 1
+
+
+def run(args, journal):
+    if args.activity_action == 'list':
+        emit('activity_result', **journal.recent(args.offset))
+        return 0
+    if args.activity_action == 'diagnose':
+        emit('activity_result', **diagnose(args.config, args.cdp))
+        return 0
 
     # 加载配置
     if not os.path.exists(args.config):
@@ -123,6 +148,17 @@ def main():
     except (OSError, ValueError, TypeError) as exc:
         emit('error', msg=str(exc))
         return 1
+
+    if args.activity_action:
+        if workflow['debug_enabled']:
+            raise ValueError('安全调试已开启，不能补登或更改登记状态；请先关闭调试')
+        settings = load_settings(args.config, config)
+        apply_wechat_settings(args.config, config)
+        registration = Registration(settings, WebhookHelper(config), lambda *a: None)
+        item = journal.recover(args.activity_id, args.record_index, args.channel, args.revision,
+                               args.activity_action, registration)
+        emit('activity_result', item=item)
+        return 0
 
     normal_action = not (args.read_action or args.approve_task or args.approval_status or args.unlock_session)
     if args.safe_debug or args.inspect_departments or (workflow['debug_enabled'] and normal_action):
@@ -179,7 +215,7 @@ def main():
             apply_wechat_settings(args.config, config)
             registration = Registration(settings, WebhookHelper(config), lambda msg, level='info': emit('log', msg=msg, level=level))
             reader = PendingReader(browser, config, lambda msg, level='info': emit('log', msg=msg, level=level), args.page_url)
-            commands = CoreCommands(reader, registration, {'config': config, 'settings': settings})
+            commands = CoreCommands(reader, registration, {'config': config, 'settings': settings}, activity=journal)
             with commands.lock():
                 if args.approval_status:
                     result = commands.status(args.task_id, args.review_token)
@@ -248,6 +284,7 @@ def main():
         oa_type=args.oa_type,
     )
 
+    activity_item = None
     try:
         settings = load_settings(args.config, config)
         apply_wechat_settings(args.config, config)
@@ -326,6 +363,15 @@ def main():
         approver.main_page = page
 
         # ── 处理审批 ──
+        if not args.test_mode:
+            activity_item = journal.begin(args.oa_type, workflow['department_id'])
+            def preserve_before_click(records):
+                snapshots = [dict(row, 数量=args.qty) for row in records]
+                if args.biz_type:
+                    for row in snapshots:
+                        row['业务类型'] = args.biz_type
+                journal.add_records(activity_item, snapshots, registration)
+            approver.before_approval = preserve_before_click
         results = approver.process_current_page(approval_target)
 
         if not results:
@@ -365,6 +411,9 @@ def main():
             return
 
         # ── 提交数据 ──
+        activity_item.update(approval='flow_returned', note='界面操作流程已返回；未独立核实后台批准结果。补登不会再次审批。')
+        activity_item['records'] = []
+        journal.add_records(activity_item, results, registration)
         success_count = 0
         for idx, data in enumerate(results):
             if cancelled.is_set():
@@ -373,7 +422,7 @@ def main():
 
             emit("data_extracted", data=data)
 
-            outcomes = registration.submit(data)
+            outcomes = journal.submit_record(activity_item, idx, registration)
             emit("registration_result", idx=idx, channels=outcomes)
             if outcomes and all(outcomes.values()):
                 success_count += 1
@@ -381,6 +430,7 @@ def main():
             elif outcomes:
                 failed = "、".join(name for name, ok in outcomes.items() if not ok)
                 emit("log", level="error", msg=f"第 {idx + 1} 条记录的{failed}登记未完成；已成功的通道不受影响，请勿为补登记重新执行审批")
+                emit('log', level='info', msg='请在“处理记录”查看各通道状态，并核实或单独补登。')
             else:
                 emit("log", level="info", msg="所有登记通道已关闭，本条仅执行审批与提取")
 

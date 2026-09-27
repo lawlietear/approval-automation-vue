@@ -5,6 +5,7 @@ import PushSettings from './PushSettings.vue'
 import BrowserConnection from './BrowserConnection.vue'
 import SoftwareUpdate from './SoftwareUpdate.vue'
 import WorkflowSettingsPanel from './WorkflowSettings.vue'
+import ActivityPanel from './ActivityPanel.vue'
 import { defaultWorkflow, type WorkflowSettings, type DebugResult } from '../workflow'
 
 const props = defineProps<{
@@ -18,6 +19,8 @@ const props = defineProps<{
   view: 'empty' | 'loading' | 'data'
   bizTypeOptions: string[]
   debugResult: DebugResult | null
+  debugError: string
+  endpoint: string
 }>()
 
 const emit = defineEmits<{
@@ -37,10 +40,11 @@ watch(() => props.isRunning, running => { if (!running) activeSystem.value = nul
 
 const settingsBusy = ref(true)
 const updateBusy = ref(false)
+const activityBusy = ref(false)
 const workflowBusy = ref(true)
 const workflow = ref(defaultWorkflow())
 const workflowMessage = ref('')
-const sysDisabled = computed(() => !props.isConnected || props.isConnecting || props.isRunning || (!workflow.value.debug_enabled && settingsBusy.value) || updateBusy.value || workflowBusy.value)
+const sysDisabled = computed(() => !props.isConnected || props.isConnecting || props.isRunning || (!workflow.value.debug_enabled && settingsBusy.value) || updateBusy.value || workflowBusy.value || activityBusy.value)
 function applyWorkflow(value: WorkflowSettings) { workflow.value = value; emit('workflowChanged', value) }
 async function changeDepartment(event: Event) {
   const value = (event.target as HTMLSelectElement).value
@@ -160,12 +164,14 @@ const handleSystem = (system: 'core' | 'oa') => {
         <div class="settings-content">
           <div v-show="settingsTab === 'registration'"><PushSettings :is-running="isRunning || updateBusy" @busy="settingsBusy = $event" @summary="summary = $event" /></div>
           <div v-show="settingsTab === 'browser'" id="browser-settings-pane"></div>
-          <div v-show="settingsTab === 'workflow'"><WorkflowSettingsPanel :is-running="isRunning || updateBusy" :can-inspect="isConnected && !isConnecting && !isRunning && !updateBusy" :saved="workflow" :result="debugResult" @busy="workflowBusy = $event" @changed="applyWorkflow" @inspect="inspectDepartments" /></div>
+          <div v-show="settingsTab === 'workflow'"><WorkflowSettingsPanel :is-running="isRunning || updateBusy" :can-inspect="isConnected && !isConnecting && !isRunning && !updateBusy" :saved="workflow" :result="debugResult" :error="debugError" @busy="workflowBusy = $event" @changed="applyWorkflow" @inspect="inspectDepartments" /></div>
           <div v-show="settingsTab === 'update'"><SoftwareUpdate :disabled="isRunning || isConnecting || settingsBusy" @busy="updateBusy = $event" /></div>
         </div>
         <footer><strong>配置仅保存在当前电脑，软件升级不会覆盖。</strong><span>v{{ appInfo.version }} · {{ appInfo.settings_directory }}</span></footer>
       </dialog>
     </Teleport>
+
+    <ActivityPanel :disabled="isRunning || updateBusy || isConnecting" :mutation-disabled="workflow.debug_enabled || workflowBusy || settingsBusy" :endpoint="endpoint" @busy="activityBusy = $event" />
 
     <div class="view-toggle" v-show="hasExtractedData">
       <div class="view-toggle-label">预览<span v-if="countdown > 0">{{ countdown }} 秒后自动隐藏</span></div>
@@ -220,12 +226,13 @@ const handleSystem = (system: 'core' | 'oa') => {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 20px clamp(20px, 3vw, 42px);
-  gap: 10px;
+  padding: 16px clamp(16px, 2vw, 26px);
+  gap: 8px;
   transition: background 0.3s ease, border-color 0.3s ease;
   flex-shrink: 0;
   overflow-y: auto;
 }
+.sidebar > * { flex-shrink: 0; }
 .logo {
   font-family: 'JetBrains Mono', monospace;
   font-size: 16px;
@@ -608,6 +615,6 @@ const handleSystem = (system: 'core' | 'oa') => {
 .registration-summary { padding:10px 12px; border-left:2px solid var(--accent); background:var(--accent-glow); border-radius:0 8px 8px 0; }
 .qty-input:focus,.biz-select:focus { animation:none; }
 @keyframes sweep { to { transform:translateX(130%); } }
-@media (max-width:800px) { .sidebar { padding:20px; } .action-card { padding:12px; } .btn-row .btn { font-size:12px; } }
+@media (max-width:800px) { .sidebar { padding:14px 16px; gap:6px; } .action-card { padding:12px; } .btn-row .btn { font-size:12px; } }
 @media (max-width:680px) { .sidebar { width:100%; min-width:0; flex-shrink:0; overflow:visible; border-right:0; border-bottom:1px solid var(--border); } }
 </style>

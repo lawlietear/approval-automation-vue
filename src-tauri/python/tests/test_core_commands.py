@@ -13,6 +13,9 @@ from src.browser import BrowserHelper
 from src.approver import ApprovalHelper
 from src.pending import PendingReader
 from src.core_commands import CoreCommands
+from src.activity import Activity
+from src.registration import Registration
+from src.webhook import WebhookHelper
 
 
 class CoreCommandTests(unittest.TestCase):
@@ -74,6 +77,25 @@ class CoreCommandTests(unittest.TestCase):
     def approve(self):
         with self.commands.lock():
             return self.commands.approve('12', self.token, '12', '2', '金融不良资产')
+
+    def test_activity_retry_updates_command_status_without_second_approval(self):
+        journal = Activity(Path(self.tmp.name) / 'config.json')
+        webhook = WebhookHelper({'webhook': {'url': 'https://example.invalid/hook', 'schema': {'title': 'id'}}})
+        registration = Registration(dict(wechat_enabled=True, obsidian_enabled=False, obsidian_directory=''), webhook, Mock())
+        self.commands.registration = registration
+        self.commands.activity = journal
+        response = Mock(status_code=200)
+        response.json.return_value = {'errcode': 40001}
+        with patch('src.webhook.requests.post', return_value=response):
+            result = self.approve()
+        self.assertEqual(result['approval'], 'confirmed')
+        self.assertFalse(self.commands.status('12', self.token)['registration_complete'])
+        item = journal.get(result['activity_id'])
+        response.json.return_value = {'errcode': 0}
+        with journal.lock(), patch('src.webhook.requests.post', return_value=response):
+            journal.recover(item['id'], 0, '企业微信', item['revision'], 'retry', registration)
+        self.assertTrue(self.commands.status('12', self.token)['registration_complete'])
+        self.assertEqual(self.page.evaluate('Number(localStorage.clicks)'), 1)
 
     def test_view_then_approve_register_and_durable_duplicate_rejection(self):
         self.assertIsNone(self.page.evaluate('localStorage.clicks'))

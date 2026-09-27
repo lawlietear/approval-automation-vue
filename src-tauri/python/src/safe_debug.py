@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .approver import ApprovalHelper
+from .department_reader import read_departments
 
 WINDOW = '#selectPartjobOrgWin'
 
@@ -81,7 +82,7 @@ def department_radio(frame, department_id):
 
 def inspect(browser, config, workflow, log, options_only=False):
     selector = config.get('approval', {}).get('approve_button_selector', '')
-    details, windows = [], []
+    details, windows, department_frames = [], [], []
     for context in browser.browser.contexts:
         for page in context.pages:
             if urlsplit(page.url).path != '/amcs/index.htm':
@@ -94,8 +95,26 @@ def inspect(browser, config, workflow, log, options_only=False):
                 has_window = frame.locator(WINDOW).filter(visible=True).count() == 1
                 if has_window:
                     windows.append(frame)
+                if options_only and frame.locator(WINDOW).count() == 1:
+                    department_frames.append(frame)
                 if not options_only and selector and frame.locator(selector).filter(visible=True).count():
                     details.append(frame)
+    if options_only:
+        if len(department_frames) != 1:
+            raise ValueError('未找到唯一核心部门组件，请仅打开一个核心详情后实时读取；无需点击通过')
+        frame = department_frames[0]
+        root = frame.locator(WINDOW)
+        if root.locator('.m-message-title').inner_text().strip() != '选择部门' or root.locator('#body_PartjobOrgTable').count() != 1:
+            raise ValueError('当前页面部门组件结构不匹配')
+        if any(f.locator('input[type=password]').filter(visible=True).count()
+               for f in frame.page.frames if visible_frame(f)):
+            raise ValueError('当前页面需要登录或解锁，请先在浏览器完成')
+        url = urlsplit(frame.url)
+        return dict(read_only=True, clicks_sent=0, registration_enabled=False,
+                    declared_steps=workflow['debug_steps'], source=f'{url.scheme}://{url.netloc}',
+                    departments=read_departments(frame), records=[],
+                    checks=['已通过当前登录会话实时查询完整部门列表，未使用隐藏窗口缓存',
+                            '未打开原审批弹窗、未调用提交回调、未发送点击或登记；请选择部门并保存'])
     if len(windows) > 1 or len(details) > 1 or not (windows or details):
         raise ValueError('未找到唯一核心详情/部门窗口；请关闭重复详情并由用户打开目标页面')
     if windows and details and windows[0].page != details[0].page:

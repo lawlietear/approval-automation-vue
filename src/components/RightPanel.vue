@@ -24,7 +24,9 @@ const props = defineProps<{
   view: 'empty' | 'loading' | 'data'
   dataMap: Record<string, string>
   pageSub: string
+  previewBusy: boolean
 }>()
+const emit = defineEmits<{ collapse: [] }>()
 const fields = computed(() => [...FIELDS, ...Object.keys(props.dataMap)
   .filter(key => !FIELDS.some(field => field.key === key))
   .map(key => ({ key, label: key, barClass: 'c-note', highlight: key === '金额' }))])
@@ -34,7 +36,7 @@ const fields = computed(() => [...FIELDS, ...Object.keys(props.dataMap)
   <div class="main">
     <div class="main-content" tabindex="0" aria-label="审批详情，可滚动查看全部字段">
       <div class="page-header">
-        <div class="page-title">审批预览<span class="detail-tag">信息单</span></div>
+        <div class="page-title">审批预览<button class="collapse-preview" :disabled="previewBusy" aria-label="收起右侧审批预览" aria-expanded="true" aria-controls="approval-preview" @click="emit('collapse')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 4v16m7-11-3 3 3 3"/></svg>收起</button></div>
         <div class="page-sub">{{ pageSub }}</div>
       </div>
 
@@ -263,7 +265,10 @@ const fields = computed(() => [...FIELDS, ...Object.keys(props.dataMap)
 .data-row:nth-child(9) { animation-delay: 440ms; }
 .data-row:nth-child(10) { animation-delay: 495ms; }
 .page-title { display:flex; align-items:center; justify-content:space-between; }
-.detail-tag { font-size:10px; font-weight:400; color:var(--accent); border:1px solid var(--border); padding:2px 9px; border-radius:20px; }
+.collapse-preview { display:flex; align-items:center; gap:5px; font:inherit; font-size:11px; font-weight:400; color:var(--text-secondary); border:1px solid var(--border); background:var(--panel); padding:5px 8px; border-radius:6px; cursor:pointer; }
+.collapse-preview:hover:not(:disabled) { color:var(--accent); border-color:var(--accent); background:var(--accent-glow); }
+.collapse-preview:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.collapse-preview svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
 .page-sub { overflow-wrap:anywhere; line-height:1.7; }
 .data-row:has(.c-item) { display:block; padding:14px 0; }
 .data-row:has(.c-item) .data-label { margin-bottom:6px; }

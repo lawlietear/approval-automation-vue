@@ -109,6 +109,7 @@ const latestLog = computed(() => {
   white-space: nowrap;
   font-family: 'JetBrains Mono', monospace;
 }
+.log-header-left > span:first-of-type { white-space:nowrap; flex-shrink:0; }
 .log-toggle {
   font-size: 12px;
   color: var(--text-secondary);
@@ -148,5 +149,6 @@ const latestLog = computed(() => {
 .log-tag.ok { background: rgba(34,197,94,0.1); color: var(--success); }
 .log-tag.info { background: rgba(115,115,115,0.08); color: var(--text-tertiary); }
 .log-tag.error { background: rgba(239,68,68,0.08); color: var(--error); }
-.log-msg { color: var(--text-tertiary); }
+.log-msg { color: var(--text-tertiary); min-width:0; overflow-wrap:anywhere; }
+@media (max-width:480px) { .log-header { padding:8px 12px; gap:8px; } .log-body { padding-left:12px; padding-right:12px; } }
 </style>

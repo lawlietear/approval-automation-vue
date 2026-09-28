@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
+import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import LeftPanel from './components/LeftPanel.vue'
 import RightPanel from './components/RightPanel.vue'
@@ -23,6 +24,27 @@ const isConnecting = ref(false)
 const connectedEndpoint = ref('')
 const stepIndex = ref(-1)
 const view = ref<'empty' | 'loading' | 'data'>('empty')
+const previewCollapsed = ref(false)
+const previewBusy = ref(false)
+let expandedWidth = 840
+
+async function togglePreview() {
+  if (previewBusy.value) return
+  previewBusy.value = true
+  const collapse = !previewCollapsed.value
+  try {
+    if (isTauri()) {
+      const win = getCurrentWindow()
+      if (await win.isMaximized()) await win.unmaximize()
+      const size = (await win.innerSize()).toLogical(await win.scaleFactor())
+      if (collapse) expandedWidth = Math.max(700, size.width)
+      await win.setSize(new LogicalSize(collapse ? 400 : expandedWidth, size.height))
+    }
+    previewCollapsed.value = collapse
+  } catch (error) {
+    addLog(`调整预览窗口失败：${error}`, 'error')
+  } finally { previewBusy.value = false }
+}
 const hasExtractedData = ref(false)
 const pageSub = ref('从左侧连接浏览器，开始审批')
 const isRunning = ref(false)
@@ -76,7 +98,7 @@ const startCountdown = () => {
   }, 1000)
   autoResetTimer = setTimeout(() => {
     view.value = 'empty'
-    pageSub.value = 'data retained. switch back anytime.'
+    pageSub.value = '数据已保留，可随时查看'
     clearTimers()
   }, 30000)
 }
@@ -144,7 +166,8 @@ const handleSwitchView = (v: 'empty' | 'data') => {
   if (!hasExtractedData.value) return
   clearTimers()
   view.value = v
-  pageSub.value = v === 'empty' ? 'data retained. switch back anytime.' : 'showing current approval detail'
+  pageSub.value = v === 'empty' ? '数据已保留，可随时查看' : '当前审批详情'
+  if (v === 'data' && previewCollapsed.value) void togglePreview()
 }
 
 // Event listeners
@@ -250,7 +273,7 @@ onUnmounted(() => {
 
 <template>
   <div class="app">
-    <div class="workspace">
+    <div class="workspace" :class="{ 'preview-collapsed': previewCollapsed }">
       <LeftPanel
         :is-dark="isDark"
         :is-connected="isConnected"
@@ -261,6 +284,8 @@ onUnmounted(() => {
         :endpoint="connectedEndpoint"
         :is-connecting="isConnecting"
         :view="view"
+        :preview-collapsed="previewCollapsed"
+        :preview-busy="previewBusy"
         :biz-type-options="bizTypeOptions"
         :debug-result="debugResult"
         :debug-error="debugError"
@@ -271,8 +296,13 @@ onUnmounted(() => {
         @start="handleStart"
         @cancel="handleCancel"
         @switch-view="handleSwitchView"
+        @toggle-preview="togglePreview"
       />
       <RightPanel
+        v-show="!previewCollapsed"
+        id="approval-preview"
+        :preview-busy="previewBusy"
+        @collapse="togglePreview"
         :view="view"
         :data-map="dataMap"
         :page-sub="pageSub"
@@ -300,4 +330,6 @@ onUnmounted(() => {
   overflow: hidden;
 }
 @media (max-width:680px) { .workspace { display:block; overflow-y:auto; } }
+.workspace.preview-collapsed { display:flex; justify-content:center; overflow:hidden; }
+.workspace.preview-collapsed :deep(.sidebar) { width:100%; max-width:440px; height:100%; overflow-y:auto; border:0; }
 </style>

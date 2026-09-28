@@ -357,15 +357,26 @@ class ApprovalHelper:
             from .safe_debug import department_options, department_radio
             from urllib.parse import urlsplit
             source = self.approval_cfg.get('dept_select_source', '')
+            waiting_reasons = set()
+            self._log('  [部门] 等待部门窗口就绪并核对已配置编号')
+
+            def log_wait(reason):
+                if reason not in waiting_reasons:
+                    waiting_reasons.add(reason)
+                    self._log(f'  [部门] 暂不能选择：{reason}；仅重读，不重复前序点击')
+
             def selected_department(ctx):
                 parsed = urlsplit(ctx.url)
                 if f'{parsed.scheme}://{parsed.netloc}' != source:
+                    log_wait('页面来源与所存部门来源不一致')
                     return ctx.locator(':not(*)')
                 try:
                     options = department_options(ctx)
-                except ValueError:
+                except ValueError as exc:
+                    log_wait(str(exc))
                     return ctx.locator(':not(*)')
                 if dept_id not in [item['id'] for item in options['items']]:
+                    log_wait('当前可见列表中没有已配置的部门编号')
                     return ctx.locator(':not(*)')
                 return department_radio(ctx, dept_id)
             selected = self._wait_click(contexts, selected_department, '选择已配置部门', action_guard=action_guard)

@@ -1,7 +1,10 @@
 """Inspection and trial clicks only. Never dispatch a DOM click or registration."""
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from playwright.sync_api import Error as PlaywrightError
 
 from .approver import ApprovalHelper
 from .department_reader import read_departments
@@ -49,31 +52,44 @@ def visible_frame(frame):
 
 
 def department_options(frame):
-    window = frame.locator(WINDOW).filter(visible=True)
-    if window.count() != 1 or not visible_frame(frame):
-        raise ValueError('请先由用户手动打开唯一的“选择部门”窗口')
-    return window.evaluate("""root => {
-      if (root.querySelector('.m-message-title')?.textContent.trim() !== '选择部门') throw Error('部门窗口标题不匹配');
-      const items = [...root.querySelectorAll('#body_PartjobOrgTable > tr')].filter(row => row.getClientRects().length).map(row => {
-        const id = row.querySelector('td[name="orgid"]')?.textContent.trim();
-        const name = row.querySelector('td[name="orgname"]')?.textContent.trim();
-        const radios = row.querySelectorAll('input[type="radio"]');
-        if (!id || !name || radios.length !== 1) throw Error('部门行结构无法识别');
-        return {id, name, checked: radios[0].checked};
-      });
-      if (!items.length || new Set(items.map(item => item.id)).size !== items.length) throw Error('部门列表为空或编号重复');
-      const pages = root.querySelector('#totalPages_PartjobOrgTable')?.textContent.trim();
-      const info = root.querySelector('#pageInfo_PartjobOrgTable')?.textContent || '';
-      const total = info.match(/共\\s*(\\d+)\\s*条记录/);
-      const controls = ['.first_page_btn','.pre_page_btn','.next_page_btn','.last_page_btn'];
-      const complete = pages === '1' && !!total && Number(total[1]) === items.length
-        && controls.every(sel => root.querySelector(sel)?.classList.contains('disabled'));
-      return {items, complete, pages: pages || null};
-    }""")
+    # Read scalar DOM values rather than trusting an object returned by page JS.
+    try:
+        window = frame.locator(WINDOW).filter(visible=True)
+        if window.count() != 1 or not visible_frame(frame):
+            raise ValueError('未找到唯一可见的“选择部门”窗口')
+        title = window.locator('.m-message-title')
+        if title.count() != 1 or (title.text_content(timeout=200) or '').strip() != '选择部门':
+            raise ValueError('部门窗口标题不匹配')
+        items = []
+        for row in window.locator('#body_PartjobOrgTable > tr').filter(visible=True).all():
+            id_cell = row.locator('td[name="orgid"]')
+            name_cell = row.locator('td[name="orgname"]')
+            radio = row.locator('input[type="radio"]')
+            if id_cell.count() != 1 or name_cell.count() != 1 or radio.count() != 1:
+                raise ValueError('部门行尚未加载完成或结构无法识别')
+            department_id = (id_cell.text_content(timeout=200) or '').strip()
+            name = (name_cell.text_content(timeout=200) or '').strip()
+            if not department_id or not name:
+                raise ValueError('部门编号或名称为空')
+            items.append(dict(id=department_id, name=name, checked=radio.is_checked(timeout=200)))
+        if not items or len({item['id'] for item in items}) != len(items):
+            raise ValueError('部门列表为空或编号重复')
+        pages_node = window.locator('#totalPages_PartjobOrgTable')
+        info_node = window.locator('#pageInfo_PartjobOrgTable')
+        pages = (pages_node.text_content(timeout=200) or '').strip() if pages_node.count() == 1 else ''
+        info = (info_node.text_content(timeout=200) or '') if info_node.count() == 1 else ''
+        total = re.search(r'共\s*(\d+)\s*条记录', info)
+        controls = [window.locator(sel) for sel in
+                    ('.first_page_btn', '.pre_page_btn', '.next_page_btn', '.last_page_btn')]
+        complete = bool(pages == '1' and total and int(total[1]) == len(items) and all(
+            control.count() == 1 and 'disabled' in (control.get_attribute('class', timeout=200) or '').split()
+            for control in controls))
+        return dict(items=items, complete=complete, pages=pages or None)
+    except PlaywrightError as exc:
+        raise ValueError('部门窗口读取中发生变化或未就绪') from exc
 
 
 def department_radio(frame, department_id):
-    import re
     # Match the ID cell, never the display name or the non-unique footer IDs.
     return frame.locator(f'{WINDOW} #body_PartjobOrgTable > tr').filter(
         has=frame.locator('td[name="orgid"]').filter(has_text=re.compile(r'^\s*' + re.escape(department_id) + r'\s*$'))

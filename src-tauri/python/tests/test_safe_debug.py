@@ -7,7 +7,7 @@ import runpy
 import unittest
 from unittest.mock import Mock, patch
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, Locator
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from src.browser import BrowserHelper
@@ -129,6 +129,29 @@ class SafeDebugTests(unittest.TestCase):
         self.assertFalse(self.page.locator('#cb_PartjobOrgTable_2').is_checked())
         self.assertEqual(self.page.evaluate('window.clicks'), 2)
 
+    def test_department_read_does_not_depend_on_object_evaluate_result(self):
+        self.config['approval'].update(dept_select_id='0_RZ001', dept_select_source='http://fixture.test')
+        helper = ApprovalHelper(self.browser, self.config, log_callback=Mock())
+        with patch.object(Locator, 'evaluate', return_value=None):
+            result = department_options(self.page)
+            self.assertEqual(result['items'][0]['id'], '0_RZ001')
+            helper._handle_subsequent_pages(self.page)
+        self.assertEqual(self.page.evaluate('window.clicks'), 2)
+
+    def test_loading_department_rows_are_retried_without_repeating_earlier_clicks(self):
+        self.config['approval'].update(dept_select_id='0_RZ001', dept_select_source='http://fixture.test')
+        self.page.evaluate("""() => {
+          const table = document.querySelector('#body_PartjobOrgTable');
+          const rows = [...table.children];
+          rows.forEach(row => row.remove());
+          table.innerHTML = '<tr><td>正在加载...</td></tr>';
+          setTimeout(() => { table.replaceChildren(...rows); }, 500);
+        }""")
+        helper = ApprovalHelper(self.browser, self.config, log_callback=Mock())
+        helper._handle_subsequent_pages(self.page)
+        self.assertTrue(self.page.locator('#cb_PartjobOrgTable_1').is_checked())
+        self.assertEqual(self.page.evaluate('window.clicks'), 2)
+
     def test_settings_fail_closed_and_preserve_debug_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'config.json'
@@ -136,6 +159,27 @@ class SafeDebugTests(unittest.TestCase):
             path.with_name('workflow.json').write_text(json.dumps({'debug_enabled': True, 'debug_steps': 0}))
             with self.assertRaises(ValueError):
                 load_workflow(path)
+
+    def test_unreadable_department_times_out_without_any_click(self):
+        self.config['approval'].update(dept_select_id='0_RZ001', dept_select_source='http://fixture.test')
+        log = Mock()
+        helper = ApprovalHelper(self.browser, self.config, log_callback=log)
+        wait_click = helper._wait_click
+        with patch('src.safe_debug.department_options', side_effect=ValueError('部门列表为空')), \
+             patch.object(helper, '_wait_click', side_effect=lambda *args, **kwargs: wait_click(*args, timeout=250, **kwargs)):
+            with self.assertRaisesRegex(RuntimeError, '停止后续点击和登记'):
+                helper._handle_subsequent_pages(self.page)
+        self.assertEqual(self.page.evaluate('window.clicks'), 0)
+        self.assertEqual(sum('部门列表为空' in str(call) for call in log.call_args_list), 1)
+
+    def test_unreadable_department_before_final_click_stops_submission(self):
+        self.config['approval'].update(dept_select_id='0_RZ001', dept_select_source='http://fixture.test')
+        helper = ApprovalHelper(self.browser, self.config, log_callback=Mock())
+        initial = department_options(self.page)
+        with patch('src.safe_debug.department_options', side_effect=[initial, ValueError('部门窗口未就绪')]):
+            with self.assertRaisesRegex(ValueError, '部门窗口未就绪'):
+                helper._handle_subsequent_pages(self.page)
+        self.assertEqual(self.page.evaluate('window.clicks'), 1)
 
     def test_changed_department_before_final_click_stops_submission(self):
         self.config['approval'].update(dept_select_id='0_RZ001', dept_select_source='http://fixture.test')

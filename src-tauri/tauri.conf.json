@@ -16,9 +16,9 @@
     "windows": [
       {
         "title": "自动化审批",
-        "width": 920,
+        "width": 840,
         "height": 740,
-        "minWidth": 700,
+        "minWidth": 380,
         "minHeight": 600,
         "center": true,
         "resizable": true,

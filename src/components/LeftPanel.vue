@@ -6,6 +6,7 @@ import BrowserConnection from './BrowserConnection.vue'
 import SoftwareUpdate from './SoftwareUpdate.vue'
 import WorkflowSettingsPanel from './WorkflowSettings.vue'
 import ActivityPanel from './ActivityPanel.vue'
+import BusinessTypeSelect from './BusinessTypeSelect.vue'
 import { defaultWorkflow, type WorkflowSettings, type DebugResult } from '../workflow'
 
 const props = defineProps<{
@@ -17,6 +18,8 @@ const props = defineProps<{
   countdown: number
   isRunning: boolean
   view: 'empty' | 'loading' | 'data'
+  previewCollapsed: boolean
+  previewBusy: boolean
   bizTypeOptions: string[]
   debugResult: DebugResult | null
   debugError: string
@@ -31,6 +34,7 @@ const emit = defineEmits<{
   workflowChanged: [value: WorkflowSettings]
   cancel: []
   switchView: [view: 'empty' | 'data']
+  togglePreview: []
 }>()
 
 const qty = ref('1')
@@ -123,9 +127,7 @@ const handleSystem = (system: 'core' | 'oa') => {
       </div>
       <div class="param-section">
         <div class="param-label">业务类型</div>
-        <select class="biz-select" aria-label="业务类型" v-model="bizType">
-          <option v-for="opt in bizTypeOptions" :key="opt">{{ opt }}</option>
-        </select>
+        <BusinessTypeSelect v-model="bizType" :options="bizTypeOptions" :disabled="isRunning || updateBusy || activityBusy" />
       </div>
     </div>
 
@@ -173,19 +175,22 @@ const handleSystem = (system: 'core' | 'oa') => {
 
     <ActivityPanel :disabled="isRunning || updateBusy || isConnecting" :mutation-disabled="workflow.debug_enabled || workflowBusy || settingsBusy" :endpoint="endpoint" @busy="activityBusy = $event" />
 
-    <div class="view-toggle" v-show="hasExtractedData">
-      <div class="view-toggle-label">预览<span v-if="countdown > 0">{{ countdown }} 秒后自动隐藏</span></div>
+    <div class="view-toggle">
+      <div v-if="hasExtractedData && countdown > 0" class="view-toggle-label">数据已保留<span>{{ countdown }} 秒后隐藏内容</span></div>
       <div class="view-toggle-btns">
         <button
+          v-if="hasExtractedData && view === 'empty'"
           class="btn"
-          :class="{ 'active-state': view === 'data' }"
+          :disabled="previewBusy"
           @click="emit('switchView', 'data')"
-        >查看数据</button>
+        >查看上次数据</button>
         <button
           class="btn"
-          :class="{ 'active-state': view === 'empty' }"
-          @click="emit('switchView', 'empty')"
-        >隐藏数据</button>
+          :aria-expanded="!previewCollapsed"
+          aria-controls="approval-preview"
+          :disabled="previewBusy"
+          @click="emit('togglePreview')"
+        ><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 4v16"/><path :d="previewCollapsed ? 'm14 9 3 3-3 3' : 'm17 9-3 3 3 3'"/></svg>{{ previewCollapsed ? '展开审批预览' : '收起审批预览' }}</button>
       </div>
     </div>
 
@@ -220,13 +225,13 @@ const handleSystem = (system: 'core' | 'oa') => {
 .settings-dialog footer { padding:16px 26px; border-top:1px solid var(--border); font-size:11px; color:var(--text-secondary); line-height:1.6; overflow-wrap:anywhere; }
 .settings-dialog footer span { display:block; margin-top:5px; }
 .sidebar {
-  width: 52%;
+  width: 400px;
   min-width: 340px;
   background: var(--panel);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 16px clamp(16px, 2vw, 26px);
+  padding: 16px 18px;
   gap: 8px;
   transition: background 0.3s ease, border-color 0.3s ease;
   flex-shrink: 0;
@@ -419,10 +424,14 @@ const handleSystem = (system: 'core' | 'oa') => {
   border-radius: 8px;
   padding: 10px;
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 10px;
   transition: background 0.3s ease, border-color 0.3s ease;
 }
+.param-section { display:flex; align-items:center; gap:8px; min-width:0; }
+.param-card .param-label { margin:0; flex-shrink:0; font-size:11px; letter-spacing:0; }
+.param-card :deep(.business-trigger) { width:auto; max-width:100%; min-width:0; font-size:13px; }
+.param-card .qty-input { width:48px; font-size:13px; padding:2px 5px; }
 .param-label {
   font-size: 12px;
   color: var(--text-secondary);
@@ -461,26 +470,6 @@ const handleSystem = (system: 'core' | 'oa') => {
   transition: border-color 0.2s;
 }
 .qty-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
-  animation: focus-breathe 2.5s ease-in-out infinite;
-}
-
-.biz-select {
-  width: 100%;
-  height: 32px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  padding: 0 8px;
-  font-size: 14px;
-  font-family: 'JetBrains Mono', monospace;
-  color: var(--text);
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.2s;
-}
-.biz-select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
   animation: focus-breathe 2.5s ease-in-out infinite;
@@ -573,6 +562,8 @@ const handleSystem = (system: 'core' | 'oa') => {
 }
 .view-toggle-btns { display: flex; gap: 6px; }
 .view-toggle .btn { flex: 1; padding: 8px; font-size: 12px; }
+.view-toggle-btns .btn { display:flex; align-items:center; justify-content:center; gap:7px; }
+.view-toggle svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
 .btn.active-state {
   border-color: var(--accent);
   color: var(--accent);
@@ -613,8 +604,8 @@ const handleSystem = (system: 'core' | 'oa') => {
 .settings-top:hover { background:var(--accent-glow); border-color:var(--accent); }
 .settings-top:active,.theme-btn:active,.view-toggle .btn:active { transform:scale(.96); }
 .registration-summary { padding:10px 12px; border-left:2px solid var(--accent); background:var(--accent-glow); border-radius:0 8px 8px 0; }
-.qty-input:focus,.biz-select:focus { animation:none; }
+.qty-input:focus { animation:none; }
 @keyframes sweep { to { transform:translateX(130%); } }
-@media (max-width:800px) { .sidebar { padding:14px 16px; gap:6px; } .action-card { padding:12px; } .btn-row .btn { font-size:12px; } }
+@media (max-width:800px) { .sidebar { width:360px; padding:14px 16px; gap:6px; } .action-card { padding:12px; } .btn-row .btn { font-size:12px; } }
 @media (max-width:680px) { .sidebar { width:100%; min-width:0; flex-shrink:0; overflow:visible; border-right:0; border-bottom:1px solid var(--border); } }
 </style>

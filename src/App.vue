@@ -301,8 +301,6 @@ onUnmounted(() => {
       <RightPanel
         v-show="!previewCollapsed"
         id="approval-preview"
-        :preview-busy="previewBusy"
-        @collapse="togglePreview"
         :view="view"
         :data-map="dataMap"
         :page-sub="pageSub"
@@ -331,5 +329,5 @@ onUnmounted(() => {
 }
 @media (max-width:680px) { .workspace { display:block; overflow-y:auto; } }
 .workspace.preview-collapsed { display:flex; justify-content:center; overflow:hidden; }
-.workspace.preview-collapsed :deep(.sidebar) { width:100%; max-width:440px; height:100%; overflow-y:auto; border:0; }
+.workspace.preview-collapsed :deep(.sidebar) { width:400px; max-width:100%; height:100%; overflow-y:auto; border-right:1px solid transparent; }
 </style>

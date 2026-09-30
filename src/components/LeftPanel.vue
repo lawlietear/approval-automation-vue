@@ -39,6 +39,18 @@ const emit = defineEmits<{
 
 const qty = ref('1')
 const bizType = ref('金融不良资产')
+const jointEnabled = ref(false)
+const jointQty = ref('1')
+const jointBizType = ref('')
+const jointTypes = new Set(['五大集团监管', '合资公司管理', '日照资产不良处置'])
+const businessOptions = computed(() => [...new Set(props.bizTypeOptions.map(type => type === '抵债资产运营' ? '抵债资产' : type))])
+const regularOptions = computed(() => businessOptions.value.filter(type => !jointTypes.has(type)))
+const quickTypes = ['金融不良资产', '存量资产处置', '非金不良资产']
+const quickOptions = computed(() => quickTypes.filter(type => regularOptions.value.includes(type)))
+const otherOptions = computed(() => regularOptions.value.filter(type => !quickTypes.includes(type)))
+const jointOptions = computed(() => businessOptions.value.filter(type => jointTypes.has(type)))
+watch(regularOptions, options => { if (!options.includes(bizType.value)) bizType.value = options[0] || '' }, { immediate: true })
+watch(jointOptions, options => { if (!options.includes(jointBizType.value)) jointBizType.value = options[0] || '' }, { immediate: true })
 const activeSystem = ref<'core' | 'oa' | null>(null)
 watch(() => props.isRunning, running => { if (!running) activeSystem.value = null })
 
@@ -49,6 +61,7 @@ const workflowBusy = ref(true)
 const workflow = ref(defaultWorkflow())
 const workflowMessage = ref('')
 const sysDisabled = computed(() => !props.isConnected || props.isConnecting || props.isRunning || (!workflow.value.debug_enabled && settingsBusy.value) || updateBusy.value || workflowBusy.value || activityBusy.value)
+const parametersDisabled = computed(() => props.isRunning || updateBusy.value || activityBusy.value)
 function applyWorkflow(value: WorkflowSettings) { workflow.value = value; emit('workflowChanged', value) }
 async function changeDepartment(event: Event) {
   const value = (event.target as HTMLSelectElement).value
@@ -79,8 +92,11 @@ function openSettings(tab = 'registration') {
 
 const handleSystem = (system: 'core' | 'oa') => {
   if (sysDisabled.value || activeSystem.value || (workflow.value.debug_enabled && system === 'oa')) return
+  const selectedType = system === 'core' ? bizType.value : jointBizType.value
+  const options = system === 'core' ? regularOptions.value : jointOptions.value
+  if ((system === 'oa' && !jointEnabled.value) || !options.includes(selectedType)) return
   activeSystem.value = system
-  emit('start', { system, qty: qty.value, bizType: bizType.value })
+  emit('start', { system, qty: system === 'core' ? qty.value : jointQty.value, bizType: selectedType })
 }
 
 </script>
@@ -91,7 +107,7 @@ const handleSystem = (system: 'core' | 'oa') => {
       <div>自动化审批 <span>工作台</span></div>
       <div class="header-tools"><button class="settings-top" @click="openSettings()">设置</button><button class="theme-btn" @click="emit('toggleTheme')" title="切换主题">
         <span>{{ isDark ? '☼' : '☾' }}</span>
-      </button></div>
+      </button><button class="preview-toggle" :aria-expanded="!previewCollapsed" :aria-label="previewCollapsed ? '展开审批预览' : '收起审批预览'" aria-controls="approval-preview" :disabled="previewBusy" @click="emit('togglePreview')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 4v16"/><path :d="previewCollapsed ? 'm14 9 3 3-3 3' : 'm17 9-3 3 3 3'"/></svg>{{ previewCollapsed ? '展开' : '收起' }}</button></div>
     </div>
 
     <div class="steps">
@@ -118,36 +134,19 @@ const handleSystem = (system: 'core' | 'oa') => {
 
     <BrowserConnection :is-running="isRunning || updateBusy" @connected="emit('connect', $event)" @busy="emit('browserBusy', $event)" @settings="openSettings('browser')" />
 
-    <div class="param-card">
-      <div class="param-section quantity-section">
-        <div class="param-label">数量</div>
-        <div class="qty-row">
-          <select class="qty-input" aria-label="审批数量" v-model="qty"><option v-for="n in 10" :key="n" :value="String(n)">{{ n }}</option></select>
-        </div>
-      </div>
-      <div class="param-section">
-        <div class="param-label">业务类型</div>
-        <BusinessTypeSelect v-model="bizType" :options="bizTypeOptions" :disabled="isRunning || updateBusy || activityBusy" />
-      </div>
-    </div>
-
-    <div class="action-card">
-      <div class="action-heading">{{ workflow.debug_enabled ? '安全调试 · 不审批不登记' : '审批并登记' }}<span>{{ isRunning ? '正在处理，请勿重复操作' : workflow.debug_enabled ? '仅提取信息及可点击性检查，不发送点击' : '核对当前浏览器页面，再选择对应系统' }}</span></div>
+    <section class="action-card business-section" aria-labelledby="regular-business-title">
+      <div class="section-heading"><h2 id="regular-business-title">常规业务</h2><span class="system-tag">核心业务系统</span></div>
+      <div class="section-meta"><label>数量 <select class="qty-input" aria-label="审批数量" v-model="qty" :disabled="parametersDisabled"><option v-for="n in 10" :key="n" :value="String(n)">{{ n }}</option></select></label><BusinessTypeSelect v-if="otherOptions.length" v-model="bizType" :options="otherOptions" placeholder="其他类型" :disabled="parametersDisabled" /></div>
+      <div v-if="quickOptions.length" class="business-types" role="group" aria-label="常规业务类型"><button v-for="type in quickOptions" :key="type" type="button" :aria-pressed="bizType === type" :disabled="parametersDisabled" @click="bizType = type">{{ type }}</button></div>
+      <p v-if="workflow.debug_enabled || !regularOptions.length" class="section-hint">{{ workflow.debug_enabled ? '安全调试：仅读取与检查，不审批、不登记' : '当前配置未提供常规业务类型' }}</p>
       <div class="btn-row">
         <button
           class="btn primary"
-          :disabled="sysDisabled"
+          :disabled="sysDisabled || !bizType"
           @click="handleSystem('core')"
           :class="{ processing: isRunning && activeSystem === 'core' }"
           :aria-busy="isRunning && activeSystem === 'core'"
         ><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h6M9 11h6m-6 4h2m3 0h1M10 21v-3h4v3"/></svg><span>核心业务系统</span><span class="action-arrow" aria-hidden="true">↗</span></button>
-        <button
-          class="btn primary"
-          :disabled="sysDisabled || workflow.debug_enabled"
-          @click="handleSystem('oa')"
-          :class="{ processing: isRunning && activeSystem === 'oa' }"
-          :aria-busy="isRunning && activeSystem === 'oa'"
-        ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Zm0 0v6h6M8 14l3 3 5-5"/></svg><span>OA 系统</span><span class="action-arrow" aria-hidden="true">↗</span></button>
       </div>
       <label v-if="workflow.show_department" class="home-department">部门选择
         <select aria-label="首页部门选择" :value="workflow.department_id" :disabled="isRunning || workflowBusy || updateBusy" @change="changeDepartment">
@@ -155,7 +154,19 @@ const handleSystem = (system: 'core' | 'oa') => {
         </select>
       </label>
       <p v-if="workflowMessage" role="alert">{{ workflowMessage }}</p>
-    </div>
+    </section>
+
+    <section class="action-card joint-section" :class="{ enabled: jointEnabled }" aria-labelledby="joint-business-title">
+      <div class="section-heading">
+        <h2 id="joint-business-title">合资公司</h2><span class="system-tag">OA 系统</span>
+      </div>
+      <div class="section-meta"><label>数量 <select class="qty-input" aria-label="合资公司审批数量" v-model="jointQty" :disabled="!jointEnabled || parametersDisabled"><option v-for="n in 10" :key="n" :value="String(n)">{{ n }}</option></select></label><button type="button" class="joint-switch" role="switch" aria-label="合资公司审批" :aria-checked="jointEnabled" :aria-controls="jointEnabled ? 'joint-business-controls' : undefined" :disabled="parametersDisabled" @click="jointEnabled = !jointEnabled"><span>{{ jointEnabled ? '已开启' : '已关闭' }}</span><i aria-hidden="true"></i></button></div>
+      <div v-if="jointEnabled" id="joint-business-controls" class="joint-controls">
+        <div class="business-types" role="group" aria-label="合资公司业务类型"><button v-for="type in jointOptions" :key="type" type="button" :aria-pressed="jointBizType === type" :disabled="parametersDisabled" @click="jointBizType = type">{{ type }}</button></div>
+        <p v-if="workflow.debug_enabled || !jointOptions.length" class="section-hint">{{ workflow.debug_enabled ? '调试模式不支持 OA，请关闭调试后使用' : '当前配置未提供合资公司业务类型' }}</p>
+        <div class="btn-row"><button class="btn primary" :disabled="sysDisabled || workflow.debug_enabled || !jointBizType" @click="handleSystem('oa')" :class="{ processing: isRunning && activeSystem === 'oa' }" :aria-busy="isRunning && activeSystem === 'oa'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Zm0 0v6h6M8 14l3 3 5-5"/></svg><span>OA 系统</span></button></div>
+      </div>
+    </section>
 
     <div class="registration-summary"><span>登记去向</span><p>{{ summary }}</p><p v-if="settingsBusy" class="pending">请先在设置中完成配置并保存</p></div>
 
@@ -175,7 +186,7 @@ const handleSystem = (system: 'core' | 'oa') => {
 
     <ActivityPanel :disabled="isRunning || updateBusy || isConnecting" :mutation-disabled="workflow.debug_enabled || workflowBusy || settingsBusy" :endpoint="endpoint" @busy="activityBusy = $event" />
 
-    <div class="view-toggle">
+    <div v-if="hasExtractedData && (countdown > 0 || view === 'empty')" class="view-toggle">
       <div v-if="hasExtractedData && countdown > 0" class="view-toggle-label">数据已保留<span>{{ countdown }} 秒后隐藏内容</span></div>
       <div class="view-toggle-btns">
         <button
@@ -184,13 +195,6 @@ const handleSystem = (system: 'core' | 'oa') => {
           :disabled="previewBusy"
           @click="emit('switchView', 'data')"
         >查看上次数据</button>
-        <button
-          class="btn"
-          :aria-expanded="!previewCollapsed"
-          aria-controls="approval-preview"
-          :disabled="previewBusy"
-          @click="emit('togglePreview')"
-        ><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 4v16"/><path :d="previewCollapsed ? 'm14 9 3 3-3 3' : 'm17 9-3 3 3 3'"/></svg>{{ previewCollapsed ? '展开审批预览' : '收起审批预览' }}</button>
       </div>
     </div>
 
@@ -212,6 +216,11 @@ const handleSystem = (system: 'core' | 'oa') => {
 .registration-summary p { margin-top:6px; line-height:1.6; }
 .pending { color:var(--accent); }
 .header-tools { display:flex; align-items:center; gap:6px; }
+.preview-toggle { display:flex; align-items:center; justify-content:center; gap:4px; width:60px; height:32px; flex-shrink:0; padding:0; border:1px solid var(--border); border-radius:6px; background:var(--panel); color:var(--text-secondary); font:inherit; font-size:11px; cursor:pointer; }
+.preview-toggle svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+.preview-toggle:hover:not(:disabled) { color:var(--accent); border-color:var(--accent); }
+.preview-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.preview-toggle:disabled { opacity:.5; cursor:wait; }
 .settings-top { font:inherit; font-size:12px; padding:7px 9px; border:1px solid var(--border); border-radius:6px; background:var(--panel); color:var(--accent); cursor:pointer; }
 .settings-dialog { margin:auto; padding:0; width:min(760px, calc(100vw - 32px)); max-height:calc(100vh - 32px); border:1px solid var(--border); border-radius:14px; background:var(--panel); color:var(--text); box-shadow:0 24px 80px #0005; }
 .settings-dialog[open] { display:flex; flex-direction:column; }
@@ -606,6 +615,33 @@ const handleSystem = (system: 'core' | 'oa') => {
 .registration-summary { padding:10px 12px; border-left:2px solid var(--accent); background:var(--accent-glow); border-radius:0 8px 8px 0; }
 .qty-input:focus { animation:none; }
 @keyframes sweep { to { transform:translateX(130%); } }
-@media (max-width:800px) { .sidebar { width:360px; padding:14px 16px; gap:6px; } .action-card { padding:12px; } .btn-row .btn { font-size:12px; } }
+.section-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.section-heading h2 { margin:0; font-size:14px; font-weight:600; }
+.system-tag { font-size:10px; color:var(--text-secondary); border:1px solid var(--border); padding:3px 6px; border-radius:4px; }
+.section-hint { margin:0; font-size:11px; line-height:1.6; color:var(--text-secondary); }
+.business-section,.joint-section { padding:12px; gap:10px; }
+.business-types { display:flex; flex-wrap:wrap; gap:5px; }
+.business-types button { padding:6px 8px; border:1px solid var(--border); border-radius:5px; background:var(--panel); color:var(--text-secondary); font:inherit; font-size:11px; cursor:pointer; transition:background .15s,border-color .15s; }
+.business-types button[aria-pressed=true] { border-color:var(--accent); color:var(--accent); background:var(--accent-glow); }
+.business-types button:hover:not(:disabled) { border-color:var(--accent); }
+.business-types button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.business-types button:disabled { opacity:.5; cursor:not-allowed; }
+.joint-section.enabled { border-color:var(--accent); background:linear-gradient(120deg,var(--accent-glow),transparent),var(--panel); }
+.joint-switch { display:flex; align-items:center; gap:7px; border:0; padding:6px 0 6px 6px; background:none; color:var(--text-secondary); font:inherit; font-size:11px; cursor:pointer; }
+.joint-switch i { width:30px; height:18px; padding:3px; border-radius:12px; background:var(--border); transition:background .18s; }
+.joint-switch i::after { content:''; display:block; width:12px; height:12px; border-radius:50%; background:var(--panel); transition:transform .18s; box-shadow:0 1px 3px #0003; }
+.joint-switch[aria-checked=true] i { background:var(--accent); }
+.joint-switch[aria-checked=true] i::after { transform:translateX(12px); background:#fff; }
+.joint-switch:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
+.joint-switch:disabled { opacity:.5; cursor:not-allowed; }
+.joint-controls { display:flex; flex-direction:column; gap:10px; animation:joint-reveal .16s ease-out; }
+.section-meta { display:flex; align-items:center; justify-content:space-between; min-height:28px; }
+.section-meta label { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--text-secondary); }
+.section-meta .qty-input { height:28px; width:48px; font-size:12px; }
+.section-meta .qty-input:disabled { opacity:.5; }
+.section-meta :deep(.business-trigger) { width:auto; max-width:65%; min-height:28px; font-size:11px; }
+.section-meta :deep(.business-trigger.selected) { border-color:var(--accent); color:var(--accent); background:var(--accent-glow); }
+@keyframes joint-reveal { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:translateY(0); } }
+@media (prefers-reduced-motion:reduce) { .joint-controls { animation:none; } .joint-switch i,.joint-switch i::after { transition:none; } }
 @media (max-width:680px) { .sidebar { width:100%; min-width:0; flex-shrink:0; overflow:visible; border-right:0; border-bottom:1px solid var(--border); } }
 </style>

@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const value = defineModel<string>({ required: true })
-const props = defineProps<{ options: string[]; disabled?: boolean }>()
+const props = defineProps<{ options: string[]; disabled?: boolean; placeholder?: string }>()
 const options = computed(() => [...new Set(props.options)])
 const trigger = ref<HTMLButtonElement>()
 const panel = ref<HTMLElement>()
@@ -79,11 +79,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <button ref="trigger" class="business-trigger" :class="{ expanded: open }" type="button"
+  <button ref="trigger" class="business-trigger" :class="{ expanded: open, selected: options.includes(value) }" type="button"
     role="combobox" aria-label="业务类型" aria-haspopup="listbox" :aria-expanded="open"
     :aria-controls="open ? listId : undefined" :aria-activedescendant="open ? `${listId}-${active}` : undefined"
     :disabled="disabled || !options.length" @click="open ? close() : reveal()" @keydown="keydown">
-    <span>{{ options.length ? value || '选择业务类型' : '暂无业务类型' }}</span>
+    <span>{{ options.length ? options.includes(value) ? value : placeholder || '选择业务类型' : '暂无业务类型' }}</span>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
   </button>
   <Teleport to="body">
